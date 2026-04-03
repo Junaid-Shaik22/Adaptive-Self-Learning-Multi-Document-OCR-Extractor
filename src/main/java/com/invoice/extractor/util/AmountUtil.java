@@ -1,0 +1,354 @@
+package com.invoice.extractor.util;
+
+import com.invoice.extractor.service.impl.LineIndexingService;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Locale;
+import java.util.regex.Matcher;
+
+public class AmountUtil {
+    public static final double MIN_SIGNIFICANT_AMOUNT = 1000.0;
+    public static final List<String> TOTAL_KEYWORDS = List.of(
+            "grand total", "total", "invoice value", "total invoice value", "amount payable",
+            "net amount", "amount due", "total amount after tax", "value (figure)");
+    public static final List<String> TAX_KEYWORDS = List.of(
+            "igst", "cgst", "sgst", "tax amount", "total tax amount", "gst output", "add : igst",
+            "add : cgst", "add : sgst");
+    public static final List<String> SUBTOTAL_KEYWORDS = List.of(
+            "taxable value", "subtotal", "sub total", "taxable amount", "amount chargeable");
+    public static final List<String> AMOUNT_IGNORE_KEYWORDS = List.of(
+            "qty", "quantity", "hsn", "sac", "rate");
+    public static final List<String> BANK_KEYWORDS = List.of(
+            "bank", "account", "a/c", "ifsc", "branch", "upi", "utr", "swift", "beneficiary");
+
+    private AmountUtil() {
+    }
+
+    public static class AmountCandidate {
+        private final LineIndexingService.IndexedLine line;
+        private final String token;
+        private final double value;
+        private final boolean percentToken;
+
+        public AmountCandidate(LineIndexingService.IndexedLine line, String token, double value, boolean percentToken) {
+            this.line = line;
+            this.token = token;
+            this.value = value;
+            this.percentToken = percentToken;
+        }
+
+        public LineIndexingService.IndexedLine getLine() {
+            return line;
+        }
+
+        public String getToken() {
+            return token;
+        }
+
+        public double getValue() {
+            return value;
+        }
+
+        public boolean isPercentToken() {
+            return percentToken;
+        }
+    }
+
+    public static class SummaryAmounts {
+        private final Double subtotal;
+        private final Double tax;
+        private final Integer lineNumber;
+
+        public SummaryAmounts(Double subtotal, Double tax, Integer lineNumber) {
+            this.subtotal = subtotal;
+            this.tax = tax;
+            this.lineNumber = lineNumber;
+        }
+
+        public Double getSubtotal() {
+            return subtotal;
+        }
+
+        public Double getTax() {
+            return tax;
+        }
+
+        public Integer getLineNumber() {
+            return lineNumber;
+        }
+    }
+
+    public static List<AmountCandidate> extractCandidates(List<LineIndexingService.IndexedLine> lines) {
+        List<AmountCandidate> candidates = new ArrayList<>();
+        if (lines == null) {
+            return candidates;
+        }
+        for (LineIndexingService.IndexedLine line : lines) {
+            String text = normalizeAmountSpacing(line.getText());
+            if (RegexUtil.containsAnyKeyword(text, BANK_KEYWORDS)) {
+                continue;
+            }
+            Matcher matcher = RegexUtil.AMOUNT_PATTERN.matcher(text.replace("Rs.", "").replace("Rs", ""));
+            while (matcher.find()) {
+                String token = matcher.group(2);
+                Double value = parseAmount(token);
+                if (value == null || value < MIN_SIGNIFICANT_AMOUNT) {
+                    continue;
+                }
+                candidates.add(new AmountCandidate(line, token, value, isPercentToken(text, matcher.end())));
+            }
+        }
+        return candidates;
+    }
+
+    public static Double parseAmount(String token) {
+        if (token == null || token.isBlank()) {
+            return null;
+        }
+        try {
+            String normalized = token
+                    .replaceAll("(?i)rs\\.?", "")
+                    .replace("₹", "")
+                    .replace("INR", "")
+                    .replace(",", "")
+                    .replace(" ", "")
+                    .trim();
+            if (normalized.isBlank()) {
+                return null;
+            }
+            return new BigDecimal(normalized).doubleValue();
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    public static String formatAmount(Double value) {
+        if (value == null) {
+            return null;
+        }
+        return BigDecimal.valueOf(value).stripTrailingZeros().toPlainString();
+    }
+
+    public static List<String> extractRawNumericTokens(String text) {
+        List<String> tokens = new ArrayList<>();
+        if (text == null) {
+            return tokens;
+        }
+        Matcher matcher = RegexUtil.AMOUNT_PATTERN
+                .matcher(normalizeAmountSpacing(text).replace("Rs.", "").replace("Rs", ""));
+        while (matcher.find()) {
+            tokens.add(matcher.group(2));
+        }
+        return tokens;
+    }
+
+    public static boolean looksLikeCurrencyToken(String token) {
+        return token != null && (token.contains(",") || token.contains("."));
+    }
+
+    public static boolean approximatelyEquals(Double left, Double right) {
+        if (left == null || right == null) {
+            return false;
+        }
+        double tolerance = Math.max(1.0, Math.max(Math.abs(left), Math.abs(right)) * 0.02);
+        return Math.abs(left - right) <= tolerance;
+    }
+
+    public static boolean isIgnoredAmountLine(String text) {
+        return RegexUtil.containsAnyKeyword(text, AMOUNT_IGNORE_KEYWORDS)
+                || RegexUtil.containsAnyKeyword(text, BANK_KEYWORDS);
+    }
+
+    public static boolean isPreferredAmountLine(String text, Collection<String> preferredKeywords) {
+        return RegexUtil.containsAnyKeyword(text, preferredKeywords);
+    }
+
+    public static boolean isTaxLine(String text) {
+        String lower = text == null ? "" : text.toLowerCase(Locale.ROOT);
+        if (lower.contains("taxable")) {
+            return false;
+        }
+        return RegexUtil.containsAnyKeyword(lower, TAX_KEYWORDS)
+                || (lower.contains("%") && RegexUtil.containsAnyKeyword(lower, List.of("igst", "cgst", "sgst", "gst")));
+    }
+
+    public static SummaryAmounts extractSummaryAmounts(List<LineIndexingService.IndexedLine> lines) {
+        if (lines == null || lines.isEmpty()) {
+            return null;
+        }
+        SummaryAmounts keywordSummary = extractKeywordSummary(lines);
+        if (keywordSummary != null && keywordSummary.getSubtotal() != null && keywordSummary.getTax() != null) {
+            return keywordSummary;
+        }
+        int headerIndex = -1;
+        for (int i = 0; i < lines.size(); i++) {
+            String lower = lines.get(i).getText().toLowerCase(Locale.ROOT);
+            if ((lower.contains("taxable") && lower.contains("tax"))
+                    || lower.contains("tax amount")
+                    || lower.contains("total tax amount")) {
+                headerIndex = i;
+                break;
+            }
+        }
+
+        if (headerIndex < 0) {
+            return null;
+        }
+
+        int start = headerIndex;
+        SummaryAmounts best = null;
+        double bestScore = Double.NEGATIVE_INFINITY;
+        for (int i = start; i < lines.size(); i++) {
+            LineIndexingService.IndexedLine line = lines.get(i);
+            List<Double> values = extractSummaryValues(line.getText());
+            if (values.size() < 2) {
+                continue;
+            }
+            double subtotal = values.get(0);
+            double tax = values.get(1);
+            if (subtotal <= tax) {
+                continue;
+            }
+            double score = values.size();
+            String lower = line.getText().toLowerCase(Locale.ROOT);
+            if (headerIndex >= 0) {
+                score += 40;
+            }
+            if (lower.contains("total")) {
+                score += 25;
+            }
+            if (lower.contains("taxable")) {
+                score += 10;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = new SummaryAmounts(subtotal, tax, line.getLineNumber());
+            }
+        }
+        return best;
+    }
+
+    public static Double extractBestAmountByKeywords(List<LineIndexingService.IndexedLine> lines,
+            Collection<String> keywords,
+            boolean preferLargest) {
+        Double best = null;
+        for (LineIndexingService.IndexedLine line : lines) {
+            String lower = line.getText().toLowerCase(Locale.ROOT);
+            if (!RegexUtil.containsAnyKeyword(lower, keywords) || isIgnoredAmountLine(lower)) {
+                continue;
+            }
+            boolean lineHasCurrencyToken = extractRawNumericTokens(line.getText()).stream()
+                    .anyMatch(AmountUtil::looksLikeCurrencyToken);
+            for (AmountCandidate candidate : extractCandidates(List.of(line))) {
+                if (candidate.isPercentToken()
+                        || (lineHasCurrencyToken && !looksLikeCurrencyToken(candidate.getToken()))) {
+                    continue;
+                }
+                if (best == null
+                        || (preferLargest && candidate.getValue() > best)
+                        || (!preferLargest && candidate.getValue() < best)) {
+                    best = candidate.getValue();
+                }
+            }
+        }
+        return best;
+    }
+
+    private static List<Double> extractSummaryValues(String text) {
+        List<String> rawTokens = extractRawNumericTokens(text);
+        List<Double> currencyValues = new ArrayList<>();
+        List<Double> plainValues = new ArrayList<>();
+        boolean hasCurrencyToken = rawTokens.stream().anyMatch(AmountUtil::looksLikeCurrencyToken);
+        for (String token : rawTokens) {
+            Double value = parseAmount(token);
+            if (value == null || value < MIN_SIGNIFICANT_AMOUNT || isPercentLike(text, token)) {
+                continue;
+            }
+            if (looksLikeCurrencyToken(token)) {
+                currencyValues.add(value);
+            } else if (!hasCurrencyToken) {
+                plainValues.add(value);
+            }
+        }
+
+        List<Double> base = !currencyValues.isEmpty() ? currencyValues : plainValues;
+        if (base.size() >= 3 && Double.compare(base.get(1), base.get(2)) == 0) {
+            return List.of(base.get(0), base.get(1));
+        }
+        if (base.size() >= 2) {
+            return List.of(base.get(0), base.get(1));
+        }
+        return List.of();
+    }
+
+    private static SummaryAmounts extractKeywordSummary(List<LineIndexingService.IndexedLine> lines) {
+        Double subtotal = null;
+        Double tax = null;
+        Integer lineNumber = null;
+        for (LineIndexingService.IndexedLine line : lines) {
+            String lower = line.getText().toLowerCase(Locale.ROOT);
+            List<AmountCandidate> candidates = extractCandidates(List.of(line));
+            if (candidates.isEmpty()) {
+                continue;
+            }
+            boolean lineHasCurrencyToken = extractRawNumericTokens(line.getText()).stream()
+                    .anyMatch(AmountUtil::looksLikeCurrencyToken);
+            if (RegexUtil.containsAnyKeyword(lower, SUBTOTAL_KEYWORDS) && subtotal == null) {
+                subtotal = largestNonPercent(candidates, lineHasCurrencyToken);
+                lineNumber = line.getLineNumber();
+            }
+            if (isTaxLine(lower)) {
+                Double taxValue = largestNonPercent(candidates, lineHasCurrencyToken);
+                if (taxValue != null) {
+                    tax = (tax == null) ? taxValue : tax + taxValue;
+                    if (lineNumber == null) {
+                        lineNumber = line.getLineNumber();
+                    }
+                }
+            }
+        }
+        if (subtotal != null || tax != null) {
+            return new SummaryAmounts(subtotal, tax, lineNumber);
+        }
+        return null;
+    }
+
+    private static Double largestNonPercent(List<AmountCandidate> candidates, boolean lineHasCurrencyToken) {
+        Double best = null;
+        for (AmountCandidate candidate : candidates) {
+            if (candidate.isPercentToken() || (lineHasCurrencyToken && !looksLikeCurrencyToken(candidate.getToken()))) {
+                continue;
+            }
+            if (best == null || candidate.getValue() > best) {
+                best = candidate.getValue();
+            }
+        }
+        return best;
+    }
+
+    private static boolean isPercentLike(String line, String token) {
+        int index = line.indexOf(token);
+        return index >= 0 && isPercentToken(line, index + token.length());
+    }
+
+    private static boolean isPercentToken(String line, int tokenEnd) {
+        if (line == null || tokenEnd >= line.length()) {
+            return false;
+        }
+        int index = tokenEnd;
+        while (index < line.length() && Character.isWhitespace(line.charAt(index))) {
+            index++;
+        }
+        return index < line.length() && line.charAt(index) == '%';
+    }
+
+    private static String normalizeAmountSpacing(String text) {
+        if (text == null) {
+            return "";
+        }
+        return text.replaceAll("(?<=\\d),\\s+(?=\\d)", ",");
+    }
+}

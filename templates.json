@@ -1,0 +1,385 @@
+[ {
+  "templateId" : "dae3e9dd-eaa3-4a7e-a3f6-b063fa2004d4",
+  "vendorName" : "ape Mahe Mine Masry SDC! Tehsarca Me CTRe [titan Rarer",
+  "vendorGstin" : null,
+  "signature" : "d3bc6625e9a2e29b330e53e8149dbc2d",
+  "layoutSignature" : null,
+  "version" : 0,
+  "qualityScore" : 0.0,
+  "fieldPositions" : {
+    "invoiceNumber" : {
+      "lineNumber" : 11,
+      "relativePosition" : 10,
+      "zone" : "TOP",
+      "keyword" : null
+    },
+    "vendorName" : {
+      "lineNumber" : 6,
+      "relativePosition" : 5,
+      "zone" : "TOP",
+      "keyword" : null
+    }
+  }
+}, {
+  "templateId" : "143a99ea-a706-47ae-9c7f-70b0c4aa4fba",
+  "vendorName" : "Ranco Industries (2022-2023)",
+  "vendorGstin" : "24AAEFR7351M1ZW",
+  "signature" : "1c7669c4f201c9acbc1680e84639b72b",
+  "layoutSignature" : null,
+  "version" : 2,
+  "qualityScore" : 0.0,
+  "fieldPositions" : {
+    "totalAmount" : {
+      "lineNumber" : 28,
+      "relativePosition" : 5,
+      "zone" : "BOTTOM",
+      "keyword" : "total"
+    },
+    "buyerGstin" : {
+      "lineNumber" : 9,
+      "relativePosition" : -1,
+      "zone" : "MIDDLE",
+      "keyword" : null
+    },
+    "taxLine" : {
+      "lineNumber" : 31,
+      "relativePosition" : 8,
+      "zone" : "BOTTOM",
+      "keyword" : "igst"
+    },
+    "invoiceNumber" : {
+      "lineNumber" : 2,
+      "relativePosition" : 1,
+      "zone" : "TOP",
+      "keyword" : "invoice no"
+    },
+    "subTotal" : {
+      "lineNumber" : 34,
+      "relativePosition" : 11,
+      "zone" : "BOTTOM",
+      "keyword" : null
+    },
+    "invoiceDate" : {
+      "lineNumber" : 3,
+      "relativePosition" : 2,
+      "zone" : "TOP",
+      "keyword" : "date"
+    },
+    "vendorName" : {
+      "lineNumber" : 2,
+      "relativePosition" : 1,
+      "zone" : "TOP",
+      "keyword" : "industries"
+    },
+    "buyerName" : {
+      "lineNumber" : 19,
+      "relativePosition" : 9,
+      "zone" : "MIDDLE",
+      "keyword" : "bill to"
+    },
+    "taxAmount" : {
+      "lineNumber" : 34,
+      "relativePosition" : 11,
+      "zone" : "BOTTOM",
+      "keyword" : null
+    },
+    "vendorGstin" : {
+      "lineNumber" : 8,
+      "relativePosition" : 7,
+      "zone" : "TOP",
+      "keyword" : "gstin"
+    },
+    "tableHeader" : {
+      "lineNumber" : 25,
+      "relativePosition" : -1,
+      "zone" : "TABLE",
+      "keyword" : null
+    }
+  }
+}, {
+  "templateId" : "68173ea5-0331-43dd-8c2e-2e46fb21468a",
+  "vendorName" : "Ranco Industries (2022-2023)",
+  "vendorGstin" : "24AAEFR7351M1ZW",
+  "signature" : "1d99ad04197bfe9c48bff077dedc566f",
+  "layoutSignature" : null,
+  "version" : 2,
+  "qualityScore" : 0.0,
+  "fieldPositions" : {
+    "totalAmount" : {
+      "lineNumber" : 28,
+      "relativePosition" : 5,
+      "zone" : "BOTTOM",
+      "keyword" : "total"
+    },
+    "taxLine" : {
+      "lineNumber" : 31,
+      "relativePosition" : 8,
+      "zone" : "BOTTOM",
+      "keyword" : "igst"
+    },
+    "invoiceNumber" : {
+      "lineNumber" : 2,
+      "relativePosition" : 1,
+      "zone" : "TOP",
+      "keyword" : "invoice no"
+    },
+    "subTotal" : {
+      "lineNumber" : 34,
+      "relativePosition" : 11,
+      "zone" : "BOTTOM",
+      "keyword" : null
+    },
+    "invoiceDate" : {
+      "lineNumber" : 3,
+      "relativePosition" : 2,
+      "zone" : "TOP",
+      "keyword" : "date"
+    },
+    "vendorName" : {
+      "lineNumber" : 2,
+      "relativePosition" : 1,
+      "zone" : "TOP",
+      "keyword" : "industries"
+    },
+    "buyerName" : {
+      "lineNumber" : 19,
+      "relativePosition" : 9,
+      "zone" : "MIDDLE",
+      "keyword" : "bill to"
+    },
+    "taxAmount" : {
+      "lineNumber" : 34,
+      "relativePosition" : 11,
+      "zone" : "BOTTOM",
+      "keyword" : null
+    },
+    "vendorGstin" : {
+      "lineNumber" : 8,
+      "relativePosition" : 7,
+      "zone" : "TOP",
+      "keyword" : "gstin"
+    },
+    "tableHeader" : {
+      "lineNumber" : 25,
+      "relativePosition" : -1,
+      "zone" : "TABLE",
+      "keyword" : null
+    }
+  }
+}, {
+  "templateId" : "fda8e8f2-fd1b-45f5-8f8d-c0bff2b535fd",
+  "vendorName" : "Ranco Industries (2022-2023)",
+  "vendorGstin" : "24AAEFR7351M1ZW",
+  "signature" : "524cb2753fe643b6fb09e03a44cf115f",
+  "layoutSignature" : "ecaf79d55dd13475d5caa2f8831402a5",
+  "version" : 3,
+  "qualityScore" : 0.9800000000000001,
+  "fieldPositions" : {
+    "totalAmount" : {
+      "lineNumber" : 28,
+      "relativePosition" : 10,
+      "zone" : "BOTTOM",
+      "keyword" : "total"
+    },
+    "taxLine" : {
+      "lineNumber" : 31,
+      "relativePosition" : 13,
+      "zone" : "BOTTOM",
+      "keyword" : "igst"
+    },
+    "invoiceNumber" : {
+      "lineNumber" : 2,
+      "relativePosition" : 1,
+      "zone" : "TOP",
+      "keyword" : "invoice no"
+    },
+    "subTotal" : {
+      "lineNumber" : 34,
+      "relativePosition" : 16,
+      "zone" : "BOTTOM",
+      "keyword" : null
+    },
+    "invoiceDate" : {
+      "lineNumber" : 3,
+      "relativePosition" : 2,
+      "zone" : "TOP",
+      "keyword" : "date"
+    },
+    "vendorName" : {
+      "lineNumber" : 2,
+      "relativePosition" : 1,
+      "zone" : "TOP",
+      "keyword" : "industries"
+    },
+    "buyerName" : {
+      "lineNumber" : 19,
+      "relativePosition" : 9,
+      "zone" : "MIDDLE",
+      "keyword" : "bill to"
+    },
+    "taxAmount" : {
+      "lineNumber" : 34,
+      "relativePosition" : 16,
+      "zone" : "BOTTOM",
+      "keyword" : null
+    },
+    "vendorGstin" : {
+      "lineNumber" : 8,
+      "relativePosition" : 7,
+      "zone" : "TOP",
+      "keyword" : "gstin"
+    },
+    "tableHeader" : {
+      "lineNumber" : 25,
+      "relativePosition" : -1,
+      "zone" : "TABLE",
+      "keyword" : null
+    }
+  }
+}, {
+  "templateId" : "24a02893-5ee8-4a5e-bc30-f751bc9b5478",
+  "vendorName" : "Mysore Ammonia and Chemicals Limited",
+  "vendorGstin" : "36AABCC0037HIZO",
+  "signature" : "04a1aefd44ee318c8e72f247643de43c",
+  "layoutSignature" : "694a3efc80125ce63cae63cd4f0bef4b",
+  "version" : 3,
+  "qualityScore" : 0.87,
+  "fieldPositions" : {
+    "totalAmount" : {
+      "lineNumber" : 44,
+      "relativePosition" : 14,
+      "zone" : "BOTTOM",
+      "keyword" : null
+    },
+    "taxLine" : {
+      "lineNumber" : 31,
+      "relativePosition" : 1,
+      "zone" : "BOTTOM",
+      "keyword" : null
+    },
+    "invoiceNumber" : {
+      "lineNumber" : 10,
+      "relativePosition" : 9,
+      "zone" : "TOP",
+      "keyword" : "invoice no"
+    },
+    "totalLine" : {
+      "lineNumber" : 30,
+      "relativePosition" : 0,
+      "zone" : "BOTTOM",
+      "keyword" : "total"
+    },
+    "invoiceDate" : {
+      "lineNumber" : 12,
+      "relativePosition" : 11,
+      "zone" : "TOP",
+      "keyword" : "date"
+    },
+    "vendorName" : {
+      "lineNumber" : 3,
+      "relativePosition" : 2,
+      "zone" : "TOP",
+      "keyword" : "limited"
+    },
+    "buyerName" : {
+      "lineNumber" : 18,
+      "relativePosition" : 1,
+      "zone" : "MIDDLE",
+      "keyword" : "consignee"
+    },
+    "vendorGstin" : {
+      "lineNumber" : 9,
+      "relativePosition" : 8,
+      "zone" : "TOP",
+      "keyword" : "gstin"
+    },
+    "tableHeader" : {
+      "lineNumber" : 19,
+      "relativePosition" : -1,
+      "zone" : "TABLE",
+      "keyword" : null
+    }
+  }
+}, {
+  "templateId" : "96103d6c-0b07-4bca-a7a7-781c30f143eb",
+  "vendorName" : "PARTH ENERGY SYSTEMS.PVT. LTD",
+  "vendorGstin" : "08AAECP5414C1Z2",
+  "signature" : "bd29aafa5b08aeedc9a0bb4f3a6c0608",
+  "layoutSignature" : "d6c3c324bdb4b622960338125ec603f0",
+  "version" : 3,
+  "qualityScore" : 1.0,
+  "fieldPositions" : {
+    "totalAmount" : {
+      "lineNumber" : 27,
+      "relativePosition" : 4,
+      "zone" : "BOTTOM",
+      "keyword" : "total"
+    },
+    "buyerGstin" : {
+      "lineNumber" : 19,
+      "relativePosition" : 7,
+      "zone" : "MIDDLE",
+      "keyword" : null
+    },
+    "taxLine" : {
+      "lineNumber" : 28,
+      "relativePosition" : 5,
+      "zone" : "BOTTOM",
+      "keyword" : "cgst"
+    },
+    "invoiceNumber" : {
+      "lineNumber" : 9,
+      "relativePosition" : 8,
+      "zone" : "TOP",
+      "keyword" : "invoice no"
+    },
+    "subTotal" : {
+      "lineNumber" : 27,
+      "relativePosition" : 4,
+      "zone" : "BOTTOM",
+      "keyword" : "sub total"
+    },
+    "totalLine" : {
+      "lineNumber" : 25,
+      "relativePosition" : 2,
+      "zone" : "BOTTOM",
+      "keyword" : "total"
+    },
+    "invoiceDate" : {
+      "lineNumber" : 10,
+      "relativePosition" : 9,
+      "zone" : "TOP",
+      "keyword" : "date"
+    },
+    "vendorName" : {
+      "lineNumber" : 1,
+      "relativePosition" : 0,
+      "zone" : "TOP",
+      "keyword" : "ltd"
+    },
+    "buyerName" : {
+      "lineNumber" : 13,
+      "relativePosition" : 1,
+      "zone" : "MIDDLE",
+      "keyword" : "ship to"
+    },
+    "taxAmount" : {
+      "lineNumber" : 27,
+      "relativePosition" : 4,
+      "zone" : "BOTTOM",
+      "keyword" : "cgst"
+    },
+    "vendorGstin" : {
+      "lineNumber" : 4,
+      "relativePosition" : 3,
+      "zone" : "TOP",
+      "keyword" : null
+    },
+    "tableHeader" : {
+      "lineNumber" : 20,
+      "relativePosition" : -1,
+      "zone" : "TABLE",
+      "keyword" : null
+    }
+  }
+} ]
