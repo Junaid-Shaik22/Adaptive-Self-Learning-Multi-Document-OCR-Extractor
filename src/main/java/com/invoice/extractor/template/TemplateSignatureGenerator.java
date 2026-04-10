@@ -34,7 +34,7 @@ public class TemplateSignatureGenerator {
     public static String generateLayoutSignature(String rawText) {
         LineIndexingService.Zones zones = LineIndexingService.indexLinesAndZones(rawText == null ? "" : rawText);
         StringBuilder builder = new StringBuilder();
-        appendLayoutTopLines(builder, zones.topZone, 4);
+        appendBestTopStructure(builder, zones.topZone);
         appendKeywordLines(builder, zones.middleZone, OcrLayoutUtil.BUYER_SECTION_KEYWORDS, 2);
         if (zones.getTableHeaderLine() != null) {
             builder.append("|TABLE=").append(normalizeStructure(zones.getTableHeaderLine().getText()));
@@ -87,23 +87,22 @@ public class TemplateSignatureGenerator {
         }
     }
 
-    private static void appendLayoutTopLines(StringBuilder builder, List<LineIndexingService.IndexedLine> lines, int maxLines) {
-        int count = 0;
+
+    private static void appendBestTopStructure(StringBuilder builder, List<LineIndexingService.IndexedLine> lines) {
+        String bestVendorLine = null;
         for (LineIndexingService.IndexedLine line : lines) {
             String lower = line.getText().toLowerCase(Locale.ROOT);
-            if (!RegexUtil.containsAnyKeyword(lower, List.of("invoice", "gstin", "tax invoice", "bill", "date"))
-                    && !lower.matches(".*\\b(ltd|limited|pvt|llp|industries|corporation|systems|chemicals)\\b.*")) {
-                continue;
-            }
-            String normalized = normalizeStructure(line.getText());
-            if (normalized.isBlank()) {
-                continue;
-            }
-            if (count++ >= maxLines) {
+            if (lower.matches(".*\\b(ltd|limited|pvt|llp|industries|corporation|systems|chemicals|solutions)\\b.*")) {
+                bestVendorLine = normalizeStructure(line.getText());
                 break;
             }
-            builder.append('|').append(normalized);
         }
+        if (bestVendorLine != null) {
+            builder.append("|VENDOR=").append(bestVendorLine);
+        }
+        appendFirstKeywordLine(builder, lines, List.of("invoice no", "invoice number", "bill no", "inv no"), "INV");
+        appendFirstKeywordLine(builder, lines, List.of("gstin", "gstin/uin", "gst no"), "GST");
+        appendFirstKeywordLine(builder, lines, List.of("tax invoice"), "TYPE");
     }
 
     private static void appendKeywordLines(StringBuilder builder,
@@ -124,6 +123,23 @@ public class TemplateSignatureGenerator {
                 break;
             }
             builder.append('|').append(normalized);
+        }
+    }
+
+    private static void appendFirstKeywordLine(StringBuilder builder,
+                                               List<LineIndexingService.IndexedLine> lines,
+                                               List<String> keywords,
+                                               String label) {
+        for (LineIndexingService.IndexedLine line : lines) {
+            String lower = line.getText().toLowerCase(Locale.ROOT);
+            if (!RegexUtil.containsAnyKeyword(lower, keywords)) {
+                continue;
+            }
+            String normalized = normalizeStructure(line.getText());
+            if (!normalized.isBlank()) {
+                builder.append('|').append(label).append('=').append(normalized);
+                return;
+            }
         }
     }
 

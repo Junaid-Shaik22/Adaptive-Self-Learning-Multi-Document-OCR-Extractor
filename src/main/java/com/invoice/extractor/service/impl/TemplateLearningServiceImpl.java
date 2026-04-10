@@ -8,6 +8,7 @@ import com.invoice.extractor.template.TemplateRepository;
 import com.invoice.extractor.template.TemplateSignatureGenerator;
 import com.invoice.extractor.util.AmountUtil;
 import com.invoice.extractor.util.DateUtil;
+import com.invoice.extractor.util.OcrLayoutUtil;
 import com.invoice.extractor.util.RegexUtil;
 import org.springframework.stereotype.Service;
 
@@ -32,7 +33,8 @@ public class TemplateLearningServiceImpl implements TemplateLearningService {
         for (Template existing : templates) {
             boolean exactMatch = signature != null && signature.equals(existing.getSignature());
             boolean layoutMatch = layoutSignature != null && layoutSignature.equals(existing.getLayoutSignature());
-            if (exactMatch || layoutMatch) {
+            boolean familyMatch = sameLayoutFamily(existing, data, fieldLines);
+            if (exactMatch || layoutMatch || familyMatch) {
                 if (shouldRefresh(existing, qualityScore, fieldLines)) {
                     existing.setSignature(signature);
                     existing.setLayoutSignature(layoutSignature);
@@ -71,6 +73,42 @@ public class TemplateLearningServiceImpl implements TemplateLearningService {
                 || currentFieldCount > existingFieldCount
                 || existing.getVendorGstin() == null
                 || existing.getVendorName() == null;
+    }
+
+    private boolean sameLayoutFamily(Template existing, InvoiceData data, Map<String, TemplateField> fieldLines) {
+        if (existing == null || existing.getFieldPositions() == null || fieldLines == null) {
+            return false;
+        }
+        if (existing.getVendorGstin() == null || data.getVendorGstin() == null
+                || !existing.getVendorGstin().equalsIgnoreCase(data.getVendorGstin())) {
+            return false;
+        }
+        int score = 0;
+        if (sameFieldWindow(existing.getFieldPositions().get("tableHeader"), fieldLines.get("tableHeader"), 3)) {
+            score += 2;
+        }
+        if (sameFieldWindow(existing.getFieldPositions().get("totalAmount"), fieldLines.get("totalAmount"), 3)
+                || sameFieldWindow(existing.getFieldPositions().get("totalLine"), fieldLines.get("totalLine"), 3)) {
+            score += 2;
+        }
+        if (sameFieldWindow(existing.getFieldPositions().get("buyerName"), fieldLines.get("buyerName"), 4)) {
+            score += 1;
+        }
+        if (sameFieldWindow(existing.getFieldPositions().get("vendorGstin"), fieldLines.get("vendorGstin"), 4)) {
+            score += 1;
+        }
+        return score >= 2;
+    }
+
+    private boolean sameFieldWindow(TemplateField left, TemplateField right, int tolerance) {
+        if (left == null || right == null) {
+            return false;
+        }
+        if (left.getZone() == null || right.getZone() == null || !left.getZone().equalsIgnoreCase(right.getZone())) {
+            return false;
+        }
+        return Math.abs(left.getRelativePosition() - right.getRelativePosition()) <= tolerance
+                || Math.abs(left.getLineNumber() - right.getLineNumber()) <= tolerance;
     }
 
     private double calculateQualityScore(InvoiceData data, Map<String, TemplateField> fieldLines) {
@@ -120,10 +158,32 @@ public class TemplateLearningServiceImpl implements TemplateLearningService {
             return false;
         }
         String normalized = RegexUtil.cleanToken(value);
-        return normalized.matches("(?i)(?=.{3,20}$)(?:\\d{3,12}|(?=.*[a-z])(?=.*\\d)[a-z0-9/-]+)");
+        String lookalike = normalized.toUpperCase()
+                .replace('0', 'O')
+                .replace('1', 'I')
+                .replace('7', 'T')
+                .replace('5', 'S')
+                .replace('8', 'B');
+        if (lookalike.matches("^(INVOICE.*|VOUCHER.*|DATE.*|FOR|ORIGINAL.*|DUPLICATE.*|RECEIVER.*|SUPPLY.*|STORE.*|MATERIAL.*|ENTERPRISE.*|STATE.*|STATION.*|TOTAL.*|AMOUNT.*)$")) {
+            return false;
+        }
+        return normalized.matches("(?i)(?=.{3,20}$)(?:\\d{3,12}|[a-z]{1,4}\\d{2,10}[a-z]?|[a-z0-9/-]*[/-][a-z0-9/-]+)");
     }
 
     private boolean looksLikeName(String value) {
-        return value != null && value.matches(".*[A-Za-z].*") && !value.matches("\\d+");
+        if (value == null || !value.matches(".*[A-Za-z].*") || value.matches("\\d+")) {
+            return false;
+        }
+        String lower = value.toLowerCase();
+        return !lower.contains("invoice")
+                && !lower.contains("description")
+                && !lower.contains("gstin")
+                && !lower.contains("bank")
+                && !lower.contains("ifsc")
+                && !lower.contains("account")
+                && !lower.contains("delivery note")
+                && !lower.contains("mode/terms")
+                && !lower.contains("reference no")
+                && !OcrLayoutUtil.isLogisticsLike(lower);
     }
 }

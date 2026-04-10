@@ -12,8 +12,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
-    private static final Pattern HSN_PATTERN = Pattern.compile("\\b\\d{4,8}\\b");
-    private static final Pattern NUMERIC_PATTERN = Pattern.compile("(?<![A-Za-z])(\\d{1,3}(?:,\\d{2,3})+(?:\\.\\d{1,3})?|\\d+(?:\\.\\d{1,3})?)(?![A-Za-z])");
+    private static final Pattern HSN_PATTERN = Pattern.compile("(?<![\\d.,])\\d{4,8}(?![\\d.,])");
+    private static final Pattern NUMERIC_PATTERN = Pattern.compile("(?<![A-Za-z])(\\d{1,3}(?:,\\d{2,3})+(?:\\.\\d{1,4})?|\\d+(?:\\.\\d{1,4})?)(?![A-Za-z])");
 
     @Override
     public List<LineItem> extract(String[] lines, int[] zones) {
@@ -55,7 +55,9 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
             return true;
         }
         // Catch common total section labels that might be missed by generic stop lines
-        return lower.contains("teal") || lower.contains("total tax amount") || lower.contains("grand total") || lower.equals("total");
+        return lower.contains("teal") || lower.contains("total tax amount") || lower.contains("grand total")
+                || lower.equals("total") || lower.contains("seal nos") || lower.contains("remarks")
+                || lower.contains("amount chargeable") || lower.contains("credit period");
     }
 
     private boolean isHeaderLike(String text, TableSchema schema) {
@@ -71,20 +73,21 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
         if (text == null || shouldStop(lower) || OcrLayoutUtil.isNonItemLine(lower)) {
             return false;
         }
+        if (countSignificantTokens(numericTokens) > 8) {
+            return false;
+        }
         // Avoid selecting total/tax lines as data rows, even if they have numeric tokens
         if (lower.contains("total") || lower.contains("tax amount") || lower.contains("igst") || lower.contains("cgst") || lower.contains("sgst")) {
             return false;
         }
-        if (numericTokens.size() >= 2) {
+        boolean hasLikelyAmount = numericTokens.stream().anyMatch(this::isLikelyAmountToken);
+        if (numericTokens.size() >= 2 && hasLikelyAmount) {
             return true;
         }
-        if (!pendingDescription.isEmpty() && numericTokens.size() >= 1) {
+        if (!pendingDescription.isEmpty() && hasLikelyAmount) {
             return true;
         }
-        if (numericTokens.isEmpty()) {
-            return false;
-        }
-        return text.matches(".*[A-Za-z].*") && !lower.contains("%");
+        return false;
     }
 
     private LineItem buildItem(String text,
@@ -103,11 +106,30 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
         if (inference.amount == null || inference.amount <= 0) {
             return null;
         }
-        String quantity = inference.quantityToken == null ? null : normalizeNumber(inference.quantityToken.token);
-        String rate = inference.rateToken == null ? null : normalizeNumber(inference.rateToken.token);
-        if (rate == null && inference.quantityToken != null && inference.quantityToken.value > 0) {
-            rate = AmountUtil.formatAmount(inference.amount / inference.quantityToken.value);
+        Double quantityValue = inference.quantityToken == null ? null : inference.quantityToken.value;
+        Double rateValue = inference.rateToken == null ? null : inference.rateToken.value;
+        if (quantityValue != null && quantityValue > inference.amount) {
+            quantityValue = null;
         }
+        if (rateValue != null && rateValue > inference.amount) {
+            rateValue = null;
+        }
+        if (quantityValue == null && rateValue != null) {
+            quantityValue = inferQuantity(inference.amount, rateValue);
+        }
+        if (rateValue == null && quantityValue != null && quantityValue > 0 && quantityValue <= inference.amount) {
+            rateValue = inference.amount / quantityValue;
+        }
+        if (quantityValue != null && rateValue != null && !AmountUtil.approximatelyEquals(quantityValue * rateValue, inference.amount)) {
+            Double inferredQuantity = inferQuantity(inference.amount, rateValue);
+            if (inferredQuantity != null) {
+                quantityValue = inferredQuantity;
+            } else if (quantityValue > 0) {
+                rateValue = inference.amount / quantityValue;
+            }
+        }
+        String quantity = quantityValue == null ? null : AmountUtil.formatAmount(quantityValue);
+        String rate = rateValue == null ? null : AmountUtil.formatAmount(rateValue);
 
         String inlineDescription = extractDescriptionFromRow(text, numericTokens, hsn);
         List<String> parts = new ArrayList<>(pendingDescription);
@@ -133,7 +155,8 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
         if (text == null) {
             return tokens;
         }
-        Matcher matcher = NUMERIC_PATTERN.matcher(text);
+        String normalizedText = text.replaceAll(",\\s*\\.", ".");
+        Matcher matcher = NUMERIC_PATTERN.matcher(normalizedText);
         while (matcher.find()) {
             String token = matcher.group(1);
             Double value = AmountUtil.parseAmount(token);
@@ -153,7 +176,7 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
     }
 
     private String extractDescriptionFragment(String text) {
-        String normalized = RegexUtil.normalizeLine(text);
+        String normalized = RegexUtil.normalizeLine(text).replaceFirst("^\\s*\\d+[\\].)]?\\s*", "");
         String lower = normalized.toLowerCase();
         if (normalized.isBlank() || OcrLayoutUtil.isNonItemLine(lower) || OcrLayoutUtil.isItemStopLine(lower)) {
             return "";
@@ -176,13 +199,6 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
         return RegexUtil.normalizeLine(cleaned);
     }
 
-    private String normalizeNumber(String token) {
-        Double value = AmountUtil.parseAmount(token);
-        if (value == null) {
-            return token;
-        }
-        return AmountUtil.formatAmount(value);
-    }
 
     private TableSchema detectSchema(LineIndexingService.Zones zones) {
         StringBuilder header = new StringBuilder();
@@ -203,7 +219,7 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
 
     private boolean isValidItem(LineItem item) {
         Double amount = AmountUtil.parseAmount(item.getAmount());
-        if (amount == null || amount <= 0) {
+        if (amount == null || amount < 100) {
             return false;
         }
         if (item.getDescription() == null || item.getDescription().isBlank() || !item.getDescription().matches(".*[A-Za-z].*")) {
@@ -211,6 +227,16 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
         }
         String lower = item.getDescription().toLowerCase();
         if (OcrLayoutUtil.isNonItemLine(lower) || OcrLayoutUtil.isItemStopLine(lower)) {
+            return false;
+        }
+        if (lower.contains("pin code") || lower.contains("state code") || lower.contains("gstin")
+                || lower.contains("place of supply") || lower.contains("hyderabad")
+                || lower.contains("seal nos") || lower.contains("remarks")
+                || lower.contains("credit period") || lower.contains("gross")
+                || lower.contains("tare") || lower.contains("nett")) {
+            return false;
+        }
+        if (item.getQuantity() == null && item.getUnitPrice() == null) {
             return false;
         }
         return item.getDescription().split("\\s+").length >= 1;
@@ -295,6 +321,19 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
     }
 
     private NumericToken chooseFallbackAmount(List<NumericToken> working) {
+        NumericToken bestCurrency = null;
+        for (int i = working.size() - 1; i >= 0; i--) {
+            NumericToken token = working.get(i);
+            if (token.percentToken || token.value <= 0 || !AmountUtil.looksLikeCurrencyToken(token.token)) {
+                continue;
+            }
+            if (bestCurrency == null || token.end > bestCurrency.end || token.value > bestCurrency.value) {
+                bestCurrency = token;
+            }
+        }
+        if (bestCurrency != null) {
+            return bestCurrency;
+        }
         NumericToken best = null;
         for (int i = working.size() - 1; i >= 0; i--) {
             NumericToken token = working.get(i);
@@ -306,6 +345,38 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
             }
         }
         return best;
+    }
+
+    private int countSignificantTokens(List<NumericToken> numericTokens) {
+        int count = 0;
+        for (NumericToken token : numericTokens) {
+            if (token.percentToken) {
+                continue;
+            }
+            if (isLikelyAmountToken(token) || token.token.replaceAll("[^0-9]", "").length() >= 4) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private boolean isLikelyAmountToken(NumericToken token) {
+        if (token == null || token.percentToken || token.value <= 0) {
+            return false;
+        }
+        return AmountUtil.looksLikeCurrencyToken(token.token) || token.value >= AmountUtil.MIN_SIGNIFICANT_AMOUNT;
+    }
+
+    private Double inferQuantity(double amount, double rate) {
+        if (rate <= 0 || rate > amount) {
+            return null;
+        }
+        double quantity = amount / rate;
+        double rounded = Math.rint(quantity);
+        if (rounded <= 0 || rounded > 100000) {
+            return null;
+        }
+        return Math.abs(quantity - rounded) <= 0.05 ? rounded : null;
     }
 
     private boolean isPercentToken(String text, int tokenEnd) {

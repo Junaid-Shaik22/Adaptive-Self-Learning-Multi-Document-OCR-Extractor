@@ -13,12 +13,15 @@ public class AmountUtil {
     public static final double MIN_SIGNIFICANT_AMOUNT = 1000.0;
     public static final List<String> TOTAL_KEYWORDS = List.of(
             "grand total", "total", "invoice value", "total invoice value", "amount payable",
-            "net amount", "amount due", "total amount after tax", "value (figure)");
+            "net amount", "amount due", "total amount after tax", "value (figure)", "total after tax",
+            "invoice amt", "inv value", "inv value (in fig)", "invoice amount");
     public static final List<String> TAX_KEYWORDS = List.of(
             "igst", "cgst", "sgst", "tax amount", "total tax amount", "gst output", "add : igst",
-            "add : cgst", "add : sgst");
+            "add : cgst", "add : sgst", "integrated tax", "gst amount");
     public static final List<String> SUBTOTAL_KEYWORDS = List.of(
-            "taxable value", "subtotal", "sub total", "taxable amount", "amount chargeable");
+            "taxable value", "subtotal", "sub total", "taxable amount", "amount chargeable",
+            "total amount before tax", "amount before tax", "total to be taxed", "taxable total",
+            "taxable amt", "sale amt");
     public static final List<String> AMOUNT_IGNORE_KEYWORDS = List.of(
             "qty", "quantity", "hsn", "sac", "rate");
     public static final List<String> BANK_KEYWORDS = List.of(
@@ -119,7 +122,11 @@ public class AmountUtil {
             if (normalized.isBlank()) {
                 return null;
             }
-            return new BigDecimal(normalized).doubleValue();
+            if (normalized.length() > 12) {
+                return null;
+            }
+            double val = new BigDecimal(normalized).doubleValue();
+            return val > 999999999.0 ? null : val;
         } catch (NumberFormatException ex) {
             return null;
         }
@@ -257,6 +264,48 @@ public class AmountUtil {
         return best;
     }
 
+    public static Double extractAmountFromWords(List<LineIndexingService.IndexedLine> lines,
+                                                Collection<String> keywords) {
+        if (lines == null || lines.isEmpty()) {
+            return null;
+        }
+        for (int i = 0; i < lines.size(); i++) {
+            String lineText = lines.get(i).getText();
+            String lower = lineText.toLowerCase(Locale.ROOT);
+            boolean candidateLine = lower.contains("indian rupees")
+                    || lower.contains("invoice value (in words)")
+                    || lower.contains("amount chargeable (inwords)")
+                    || (lower.contains("in words") && (keywords == null || RegexUtil.containsAnyKeyword(lower, keywords)));
+            if (!candidateLine) {
+                continue;
+            }
+            Double parsed = parseAmountWords(lineText);
+            if (parsed != null && parsed >= MIN_SIGNIFICANT_AMOUNT) {
+                if (i + 1 < lines.size() && lower.contains("in words")) {
+                    String next = lines.get(i + 1).getText();
+                    String nextLower = next.toLowerCase(Locale.ROOT).trim();
+                    if (startsWithNumberWord(nextLower) && !nextLower.contains("in words")) {
+                        Double combined = parseAmountWords(lineText + " " + next);
+                        if (combined != null && combined >= parsed) {
+                            return combined;
+                        }
+                    }
+                }
+                return parsed;
+            }
+            if (i + 1 < lines.size() && lower.contains("in words")) {
+                String next = lines.get(i + 1).getText();
+                if (startsWithNumberWord(next.toLowerCase(Locale.ROOT).trim())) {
+                    parsed = parseAmountWords(next);
+                    if (parsed != null && parsed >= MIN_SIGNIFICANT_AMOUNT) {
+                        return parsed;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     private static List<Double> extractSummaryValues(String text) {
         List<String> rawTokens = extractRawNumericTokens(text);
         List<Double> currencyValues = new ArrayList<>();
@@ -350,5 +399,129 @@ public class AmountUtil {
             return "";
         }
         return text.replaceAll("(?<=\\d),\\s+(?=\\d)", ",");
+    }
+
+    private static Double parseAmountWords(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        String normalized = text.toLowerCase(Locale.ROOT)
+                .replace("fourty", "forty")
+                .replace('-', ' ')
+                .replaceAll("[^a-z\\s]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        int rupeesIndex = normalized.indexOf("indian rupees");
+        if (rupeesIndex >= 0) {
+            normalized = normalized.substring(rupeesIndex + "indian rupees".length()).trim();
+        }
+        normalized = normalized
+                .replace("rupees", " ")
+                .replace("rupee", " ")
+                .replace("rs", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (normalized.isBlank()) {
+            return null;
+        }
+
+        long total = 0;
+        long current = 0;
+        boolean seenNumberWord = false;
+        for (String token : normalized.split("\\s+")) {
+            Integer small = smallNumber(token);
+            if (small != null) {
+                current += small;
+                seenNumberWord = true;
+                continue;
+            }
+            Integer tens = tensNumber(token);
+            if (tens != null) {
+                current += tens;
+                seenNumberWord = true;
+                continue;
+            }
+            switch (token) {
+                case "hundred" -> {
+                    current = current == 0 ? 100 : current * 100;
+                    seenNumberWord = true;
+                }
+                case "thousand" -> {
+                    total += current * 1_000L;
+                    current = 0;
+                    seenNumberWord = true;
+                }
+                case "lakh", "lakhs", "lac", "lacs" -> {
+                    total += current * 100_000L;
+                    current = 0;
+                    seenNumberWord = true;
+                }
+                case "crore", "crores" -> {
+                    total += current * 10_000_000L;
+                    current = 0;
+                    seenNumberWord = true;
+                }
+                case "and", "only" -> {
+                }
+                default -> {
+                    if (token.startsWith("pais")) {
+                        return seenNumberWord ? (double) (total + current) : null;
+                    }
+                }
+            }
+        }
+        return seenNumberWord ? (double) (total + current) : null;
+    }
+
+    private static Integer smallNumber(String token) {
+        return switch (token) {
+            case "zero" -> 0;
+            case "one" -> 1;
+            case "two" -> 2;
+            case "three" -> 3;
+            case "four" -> 4;
+            case "five" -> 5;
+            case "six" -> 6;
+            case "seven" -> 7;
+            case "eight" -> 8;
+            case "nine" -> 9;
+            case "ten" -> 10;
+            case "eleven" -> 11;
+            case "twelve" -> 12;
+            case "thirteen" -> 13;
+            case "fourteen" -> 14;
+            case "fifteen" -> 15;
+            case "sixteen" -> 16;
+            case "seventeen" -> 17;
+            case "eighteen" -> 18;
+            case "nineteen" -> 19;
+            default -> null;
+        };
+    }
+
+    private static Integer tensNumber(String token) {
+        return switch (token) {
+            case "twenty" -> 20;
+            case "thirty" -> 30;
+            case "forty" -> 40;
+            case "fifty" -> 50;
+            case "sixty" -> 60;
+            case "seventy" -> 70;
+            case "eighty" -> 80;
+            case "ninety" -> 90;
+            default -> null;
+        };
+    }
+
+    private static boolean startsWithNumberWord(String text) {
+        if (text == null || text.isBlank()) {
+            return false;
+        }
+        String first = text.split("\\s+")[0];
+        return smallNumber(first) != null || tensNumber(first) != null
+                || "hundred".equals(first) || "thousand".equals(first)
+                || "lakh".equals(first) || "lakhs".equals(first)
+                || "lac".equals(first) || "lacs".equals(first)
+                || "crore".equals(first) || "crores".equals(first);
     }
 }

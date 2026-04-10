@@ -15,7 +15,7 @@ A production-ready Java 17 Spring Boot REST API for extracting invoice data from
 
 ## Technologies
 - Java 17, Spring Boot, Maven
-- Tess4J (Tesseract OCR), Apache PDFBox
+- Tess4J (Tesseract OCR), PyMuPDF-backed PDF text/page extraction
 - Jackson, Lombok, Commons Codec
 
 ## API

@@ -10,6 +10,12 @@ import java.util.regex.Pattern;
 
 public class RegexUtil {
     private static final String BASE36_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    private static final Set<String> VALID_GST_STATE_CODES = Set.of(
+            "01", "02", "03", "04", "05", "06", "07", "08", "09", "10",
+            "11", "12", "13", "14", "15", "16", "17", "18", "19", "20",
+            "21", "22", "23", "24", "25", "26", "27", "28", "29", "30",
+            "31", "32", "33", "34", "35", "36", "37", "38", "97"
+    );
 
     public static final Pattern GSTIN_PATTERN = Pattern.compile(
             "\\d{2}[A-Z]{5}\\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]",
@@ -59,8 +65,18 @@ public class RegexUtil {
             return false;
         }
         String lower = text.toLowerCase(Locale.ROOT);
+        String compact = lower.replaceAll("[^a-z0-9]", "");
+        String ocrCompact = normalizeOcrKeyword(compact);
         for (String keyword : keywords) {
-            if (lower.contains(keyword.toLowerCase(Locale.ROOT))) {
+            String normalizedKeyword = keyword.toLowerCase(Locale.ROOT);
+            if (lower.contains(normalizedKeyword)) {
+                return true;
+            }
+            String compactKeyword = normalizedKeyword.replaceAll("[^a-z0-9]", "");
+            if (!compactKeyword.isEmpty() && compact.contains(compactKeyword)) {
+                return true;
+            }
+            if (!compactKeyword.isEmpty() && ocrCompact.contains(normalizeOcrKeyword(compactKeyword))) {
                 return true;
             }
         }
@@ -72,7 +88,16 @@ public class RegexUtil {
             return false;
         }
         String normalized = value.replaceAll("[^A-Za-z0-9]", "").toUpperCase(Locale.ROOT);
-        return GSTIN_PATTERN.matcher(normalized).matches();
+        return GSTIN_PATTERN.matcher(normalized).matches()
+                && hasValidGstinStateCode(normalized);
+    }
+
+    public static boolean hasGstinChecksum(String value) {
+        if (value == null) {
+            return false;
+        }
+        String normalized = value.replaceAll("[^A-Za-z0-9]", "").toUpperCase(Locale.ROOT);
+        return normalized.length() == 15 && hasValidGstinChecksum(normalized);
     }
 
     public static String repairGstinCandidate(String token) {
@@ -83,8 +108,30 @@ public class RegexUtil {
         if (normalized.length() != 15) {
             return null;
         }
-        if (GSTIN_PATTERN.matcher(normalized).matches() && hasValidGstinChecksum(normalized)) {
+        if (!looksLikeGstinToken(normalized)) {
+            return null;
+        }
+        if (isValidGstin(normalized) && hasGstinChecksum(normalized) && !needsGstinRepair(normalized)) {
             return normalized;
+        }
+        String positionalBody = positionalGstinBody(normalized);
+        String positionalRepair = null;
+        if (isAmbiguousTrailingCheckDigit(normalized.charAt(14))) {
+            positionalRepair = positionalBody + repairTrailingCheckDigit(normalized.charAt(14));
+            if (isValidGstin(positionalRepair)) {
+                return positionalRepair;
+            }
+        }
+        String checksumRepair = positionalBody + computeGstinCheckDigit(positionalBody);
+        if (isValidGstin(checksumRepair)) {
+            return checksumRepair;
+        }
+        if (positionalRepair != null && isValidGstin(positionalRepair)) {
+            return positionalRepair;
+        }
+
+        if (countAmbiguousGstinPositions(normalized) > 4) {
+            return null;
         }
 
         List<List<Character>> options = new ArrayList<>();
@@ -98,14 +145,21 @@ public class RegexUtil {
 
         String[] best = new String[]{null};
         int[] bestDistance = new int[]{Integer.MAX_VALUE};
-        searchGstinCandidates(normalized, options, 0, new StringBuilder(), best, bestDistance);
-        return best[0];
+        int[] explored = new int[]{0};
+        searchGstinCandidates(normalized, options, 0, new StringBuilder(), best, bestDistance, explored, 4096);
+        if (best[0] != null) {
+            return best[0];
+        }
+        return isValidGstin(normalized) ? normalized : null;
     }
 
     public static String repairInvoiceNumberCandidate(String token) {
         String normalized = cleanToken(token).toUpperCase(Locale.ROOT);
         if (normalized.length() < 3 || normalized.length() > 20) {
             return normalized;
+        }
+        if (normalized.matches("^[IL]\\d{2,11}$")) {
+            return normalized.replaceFirst("^[IL]", "1");
         }
         if (DateUtil.isValidInvoiceDate(normalized) || GSTIN_PATTERN.matcher(normalized).matches()) {
             return normalized;
@@ -130,8 +184,14 @@ public class RegexUtil {
                                               int index,
                                               StringBuilder builder,
                                               String[] best,
-                                              int[] bestDistance) {
+                                              int[] bestDistance,
+                                              int[] explored,
+                                              int maxExplored) {
+        if (explored[0] >= maxExplored) {
+            return;
+        }
         if (index == options.size()) {
+            explored[0]++;
             char checksum = computeGstinCheckDigit(builder.toString());
             String candidate = builder.toString() + checksum;
             if (!isValidGstin(candidate)) {
@@ -147,7 +207,7 @@ public class RegexUtil {
 
         for (char option : options.get(index)) {
             builder.append(option);
-            searchGstinCandidates(source, options, index + 1, builder, best, bestDistance);
+            searchGstinCandidates(source, options, index + 1, builder, best, bestDistance, explored, maxExplored);
             builder.deleteCharAt(builder.length() - 1);
         }
     }
@@ -162,6 +222,87 @@ public class RegexUtil {
         return options;
     }
 
+    private static String positionalGstinBody(String normalized) {
+        StringBuilder repaired = new StringBuilder(14);
+        for (int index = 0; index < 14; index++) {
+            char current = normalized.charAt(index);
+            if (index == 13) {
+                repaired.append('Z');
+                continue;
+            }
+            if (index == 11) {
+                repaired.append(repairPanTailLetter(current));
+                continue;
+            }
+            if (index == 12) {
+                repaired.append(repairToEntityCode(current));
+                continue;
+            }
+            if (index < 2 || (index >= 7 && index <= 10)) {
+                repaired.append(repairToDigit(current));
+                continue;
+            }
+            repaired.append(repairToLetter(current));
+        }
+        return repaired.toString();
+    }
+
+    private static char repairToDigit(char value) {
+        return switch (Character.toUpperCase(value)) {
+            case 'O', 'Q', 'D' -> '0';
+            case 'I', 'L' -> '1';
+            case 'Z' -> '2';
+            case 'S' -> '5';
+            case 'B' -> '8';
+            case 'G' -> '6';
+            case 'T' -> '7';
+            default -> Character.isDigit(value) ? value : '0';
+        };
+    }
+
+    private static char repairToLetter(char value) {
+        return switch (Character.toUpperCase(value)) {
+            case '0' -> 'O';
+            case '1' -> 'I';
+            case '2' -> 'Z';
+            case '5' -> 'S';
+            case '8' -> 'B';
+            case '6' -> 'G';
+            case '7' -> 'T';
+            case '9' -> 'Q';
+            default -> Character.toUpperCase(value);
+        };
+    }
+
+    private static char repairPanTailLetter(char value) {
+        return switch (Character.toUpperCase(value)) {
+            case '0', '9' -> 'Q';
+            default -> repairToLetter(value);
+        };
+    }
+
+    private static char repairTrailingCheckDigit(char value) {
+        return switch (Character.toUpperCase(value)) {
+            case 'O', 'Q', 'D' -> '0';
+            case 'I', 'L' -> '1';
+            case 'R' -> '2';
+            default -> Character.toUpperCase(value);
+        };
+    }
+
+    private static boolean isAmbiguousTrailingCheckDigit(char value) {
+        return "OQDILR".indexOf(Character.toUpperCase(value)) >= 0;
+    }
+
+    private static char repairToEntityCode(char value) {
+        char normalized = Character.toUpperCase(value);
+        return switch (normalized) {
+            case 'I', 'L' -> '1';
+            case 'O', 'Q', 'D' -> '1';
+            default -> Character.isLetterOrDigit(normalized) && normalized != '0' ? normalized : '1';
+        };
+    }
+
     private static boolean isAllowedForGstinPosition(char value, int index) {
         if (index == 13) {
             return value == 'Z';
@@ -170,12 +311,81 @@ public class RegexUtil {
             return Character.isLetterOrDigit(value) && value != '0';
         }
         if (index == 11) {
-            return Character.isLetterOrDigit(value);
+            return Character.isLetter(value);
         }
         if (index >= 2 && index <= 6) {
             return Character.isLetter(value);
         }
         return Character.isDigit(value);
+    }
+
+    private static boolean looksLikeGstinToken(String token) {
+        if (token == null || token.length() != 15) {
+            return false;
+        }
+        if (!isDigitLike(token.charAt(0)) || !isDigitLike(token.charAt(1))) {
+            return false;
+        }
+        int letters = 0;
+        int digits = 0;
+        for (int index = 2; index <= 6; index++) {
+            if (isLetterLike(token.charAt(index))) {
+                letters++;
+            }
+        }
+        for (int index = 7; index <= 10; index++) {
+            if (isDigitLike(token.charAt(index))) {
+                digits++;
+            }
+        }
+        return letters >= 4 && digits >= 3
+                && isLetterLike(token.charAt(11))
+                && isAlphaNumericLike(token.charAt(12))
+                && isZLike(token.charAt(13));
+    }
+
+    private static int countAmbiguousGstinPositions(String token) {
+        int ambiguous = 0;
+        for (int index = 0; index < token.length(); index++) {
+            if (ocrAlternatives(token.charAt(index)).size() > 1) {
+                ambiguous++;
+            }
+        }
+        return ambiguous;
+    }
+
+    private static boolean isDigitLike(char value) {
+        return Character.isDigit(value) || "OQDILZSBTG".indexOf(Character.toUpperCase(value)) >= 0;
+    }
+
+    private static boolean isLetterLike(char value) {
+        return Character.isLetter(value) || "01256789".indexOf(value) >= 0;
+    }
+
+    private static boolean isAlphaNumericLike(char value) {
+        return Character.isLetterOrDigit(value) || "OQDIL".indexOf(Character.toUpperCase(value)) >= 0;
+    }
+
+    private static boolean isZLike(char value) {
+        char normalized = Character.toUpperCase(value);
+        return normalized == 'Z' || normalized == '2';
+    }
+
+    private static boolean hasValidGstinStateCode(String gstin) {
+        return gstin != null && gstin.length() >= 2 && VALID_GST_STATE_CODES.contains(gstin.substring(0, 2));
+    }
+
+    private static boolean needsGstinRepair(String token) {
+        if (token == null || token.length() != 15) {
+            return false;
+        }
+        if (!hasValidGstinChecksum(token)) {
+            return true;
+        }
+        if (!Character.isDigit(token.charAt(12)) && token.charAt(12) != 'A' && token.charAt(12) != 'B' && token.charAt(12) != 'C' && token.charAt(12) != 'D') {
+            return "ILOQDSZBTG".indexOf(token.charAt(12)) >= 0;
+        }
+        return false;
     }
 
     private static char computeGstinCheckDigit(String body) {
@@ -256,6 +466,9 @@ public class RegexUtil {
         if (candidate.endsWith("-") || candidate.endsWith("/")) {
             score -= 40;
         }
+        if (source.matches("^\\d+$")) {
+            score += candidate.matches("^\\d+$") ? 40 : -25;
+        }
         score -= editDistance(source, candidate) * 6;
         for (int i = 0; i < Math.min(source.length(), candidate.length()); i++) {
             if (source.charAt(i) == candidate.charAt(i)) {
@@ -295,7 +508,20 @@ public class RegexUtil {
             case 'G' -> List.of('G', '6');
             case '7' -> List.of('7', 'T');
             case 'T' -> List.of('T', '7');
+            case '9' -> List.of('9', 'Q', '0');
             default -> List.of(normalized);
         };
+    }
+
+    private static String normalizeOcrKeyword(String text) {
+        return text
+                .replace('0', 'o')
+                .replace('1', 'i')
+                .replace('2', 'z')
+                .replace('5', 's')
+                .replace('6', 'g')
+                .replace('7', 't')
+                .replace('8', 's')
+                .replace('9', 'q');
     }
 }

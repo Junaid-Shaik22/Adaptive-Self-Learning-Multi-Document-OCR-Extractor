@@ -7,8 +7,6 @@ import com.invoice.extractor.util.TextUtil;
 import net.sourceforge.tess4j.ITesseract;
 import net.sourceforge.tess4j.Tesseract;
 import net.sourceforge.tess4j.TesseractException;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.rendering.PDFRenderer;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -17,16 +15,29 @@ import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 @Service
 public class OcrServiceImpl implements OcrService {
-    private static final int DPI = 300;
+    private static final int DEFAULT_DPI = 300;
     private static final int UPSCALE_FACTOR = 2;
     private static final int[] PAGE_SEGMENTATION_MODES = {11, 6, 4};
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OcrServiceImpl.class);
+    private final int dpi;
+
+    public OcrServiceImpl() {
+        this(DEFAULT_DPI);
+    }
+
+    public OcrServiceImpl(int dpi) {
+        this.dpi = dpi <= 0 ? DEFAULT_DPI : dpi;
+    }
 
     @Override
     public String extractText(MultipartFile file) {
@@ -47,21 +58,56 @@ public class OcrServiceImpl implements OcrService {
     }
 
     private String extractTextFromPdf(MultipartFile file) throws IOException, TesseractException {
-        List<BufferedImage> images = pdfToImages(file);
-        StringBuilder sb = new StringBuilder();
-        for (BufferedImage img : images) {
-            sb.append(extractBestText(img)).append("\n");
+        Path tempPdf = Files.createTempFile("invoice-", ".pdf");
+        Path renderDir = Files.createTempDirectory("invoice-pages-");
+        try {
+            Files.write(tempPdf, file.getBytes());
+            String embeddedText = extractEmbeddedPdfText(tempPdf);
+            if (scoreOcrText(embeddedText) >= 60) {
+                return embeddedText;
+            }
+
+            List<BufferedImage> images = renderPdfPages(tempPdf, renderDir);
+            StringBuilder sb = new StringBuilder();
+            for (BufferedImage img : images) {
+                sb.append(extractBestText(img)).append("\n");
+            }
+            return sb.toString();
+        } finally {
+            deleteQuietly(tempPdf);
+            deleteTreeQuietly(renderDir);
         }
-        return sb.toString();
     }
 
-    private List<BufferedImage> pdfToImages(MultipartFile file) throws IOException {
+    private List<BufferedImage> renderPdfPages(Path pdfPath, Path renderDir) throws IOException {
         List<BufferedImage> images = new ArrayList<>();
-        try (PDDocument document = PDDocument.load(file.getInputStream())) {
-            PDFRenderer pdfRenderer = new PDFRenderer(document);
-            for (int page = 0; page < document.getNumberOfPages(); ++page) {
-                BufferedImage bim = pdfRenderer.renderImageWithDPI(page, DPI);
-                images.add(bim);
+        String script = """
+                import fitz
+                import sys
+                from pathlib import Path
+
+                pdf = Path(sys.argv[1])
+                out_dir = Path(sys.argv[2])
+                out_dir.mkdir(parents=True, exist_ok=True)
+                doc = fitz.open(pdf)
+                scale = float(sys.argv[3]) / 72
+                matrix = fitz.Matrix(scale, scale)
+                for index in range(doc.page_count):
+                    page = doc.load_page(index)
+                    pix = page.get_pixmap(matrix=matrix, alpha=False)
+                    output = out_dir / f"page_{index + 1}.png"
+                    pix.save(output.as_posix())
+                    print(output.as_posix())
+                """;
+        List<String> paths = runPythonScript(script, pdfPath.toString(), renderDir.toString(), Integer.toString(dpi));
+        paths.sort(Comparator.naturalOrder());
+        for (String path : paths) {
+            if (path == null || path.isBlank()) {
+                continue;
+            }
+            BufferedImage image = ImageIO.read(Path.of(path.trim()).toFile());
+            if (image != null) {
+                images.add(image);
             }
         }
         return images;
@@ -105,7 +151,7 @@ public class OcrServiceImpl implements OcrService {
         tesseract.setLanguage("eng");
         tesseract.setPageSegMode(pageSegMode);
         tesseract.setVariable("preserve_interword_spaces", "1");
-        tesseract.setVariable("user_defined_dpi", String.valueOf(DPI));
+        tesseract.setVariable("user_defined_dpi", String.valueOf(dpi));
         return tesseract;
     }
 
@@ -132,7 +178,7 @@ public class OcrServiceImpl implements OcrService {
         BufferedImage thresholded = adaptiveThreshold(gray);
         BufferedImage denoised = medianFilter(thresholded);
         BufferedImage deskewed = deskew(denoised);
-        BufferedImage dpiImg = ensureDpi(deskewed, DPI);
+        BufferedImage dpiImg = ensureDpi(deskewed, dpi);
         BufferedImage borderless = removeBorders(dpiImg);
         return borderless;
     }
@@ -195,7 +241,7 @@ public class OcrServiceImpl implements OcrService {
     }
 
     private BufferedImage ensureDpi(BufferedImage img, int dpi) {
-        // DPI is metadata, not pixel data; for OCR, image is already at correct DPI if rendered from PDFBox
+        // DPI is metadata, not pixel data; rendered PDF pages are already scaled for OCR.
         return img;
     }
 
@@ -208,6 +254,84 @@ public class OcrServiceImpl implements OcrService {
             return img.getSubimage(border, border, w - 2 * border, h - 2 * border);
         }
         return img;
+    }
+
+    private String extractEmbeddedPdfText(Path pdfPath) {
+        String script = """
+                import fitz
+                import sys
+                from pathlib import Path
+
+                pdf = Path(sys.argv[1])
+                doc = fitz.open(pdf)
+                parts = []
+                for index in range(doc.page_count):
+                    parts.append(doc.load_page(index).get_text("text"))
+                print("\\n".join(parts))
+                """;
+        try {
+            return String.join("\n", runPythonScript(script, pdfPath.toString()));
+        } catch (IOException ex) {
+            log.warn("Embedded PDF text extraction failed for {}", pdfPath, ex);
+            return "";
+        }
+    }
+
+    private List<String> runPythonScript(String script, String... args) throws IOException {
+        Path tempScript = Files.createTempFile("invoice-pdf-", ".py");
+        try {
+            Files.writeString(tempScript, script, StandardCharsets.UTF_8);
+            List<String> command = new ArrayList<>();
+            command.add("python");
+            command.add(tempScript.toString());
+            for (String arg : args) {
+                command.add(arg);
+            }
+            Process process = new ProcessBuilder(command)
+                    .redirectErrorStream(true)
+                    .start();
+            List<String> output = new ArrayList<>();
+            try (var reader = process.inputReader(StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.add(line);
+                }
+            }
+            try {
+                int exitCode = process.waitFor();
+                if (exitCode != 0) {
+                    throw new IOException("Python script failed with exit code " + exitCode + ": " + String.join("\n", output));
+                }
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Python execution interrupted", ex);
+            }
+            return output;
+        } finally {
+            deleteQuietly(tempScript);
+        }
+    }
+
+    private void deleteTreeQuietly(Path path) {
+        if (path == null || Files.notExists(path)) {
+            return;
+        }
+        try (var walk = Files.walk(path)) {
+            walk.sorted(Comparator.reverseOrder()).forEach(this::deleteQuietly);
+        } catch (IOException ex) {
+            log.debug("Unable to delete temp directory {}", path, ex);
+        }
+    }
+
+    private void deleteQuietly(Path path) {
+        if (path == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException ex) {
+            log.debug("Unable to delete temp path {}", path, ex);
+        }
     }
 
     private int countPattern(java.util.regex.Pattern pattern, String text) {

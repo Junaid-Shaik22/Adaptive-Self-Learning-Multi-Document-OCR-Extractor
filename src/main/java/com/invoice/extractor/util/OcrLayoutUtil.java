@@ -7,6 +7,23 @@ import java.util.Locale;
 import java.util.Set;
 
 public final class OcrLayoutUtil {
+    public static final List<String> BUSINESS_KEYWORDS = List.of(
+            "ltd", "limited", "pvt", "private", "llp", "corporation", "industries", "enterprises",
+            "solutions", "engineering", "chemicals", "electronics", "systems", "products", "company",
+            "agency", "traders", "brothers", "associates", "logistics", "services", "co"
+    );
+
+    public static final List<String> GOVERNMENT_KEYWORDS = List.of(
+            "department", "directorate", "ministry", "government", "govt", "atomic energy",
+            "stores officer", "purchase unit", "regional stores unit", "fuel complex", "plant site"
+    );
+
+    public static final List<String> HEADER_NOISE_KEYWORDS = List.of(
+            "invoice", "tax invoice", "e-invoice", "voucher", "statement", "receipt", "challan",
+            "delivery note", "dispatch doc", "reference no", "mode/terms", "original for", "duplicate for",
+            "triplicate for", "recipient", "supplier", "copy", "ack no", "ack date", "irn"
+    );
+
     public static final List<String> HEADER_METADATA_KEYWORDS = List.of(
             "invoice no", "invoice number", "invoice #", "e-way", "dated", "delivery note",
             "mode/terms", "mode / terms", "reference no", "buyer's order", "purchase order",
@@ -24,7 +41,8 @@ public final class OcrLayoutUtil {
 
     public static final List<String> BUYER_SECTION_KEYWORDS = List.of(
             "buyer", "bill to", "billed to", "consignee", "ship to", "details of recipient",
-            "details of consignee", "details of recipient (billed to)", "details of consignee (shipped to)"
+            "details of consignee", "details of receiver", "details of recipient (billed to)",
+            "details of consignee (shipped to)", "details of receiver (billed to)"
     );
 
     public static final List<String> LOGISTICS_KEYWORDS = List.of(
@@ -41,17 +59,24 @@ public final class OcrLayoutUtil {
     public static final List<String> NON_ITEM_KEYWORDS = List.of(
             "total", "grand total", "amount payable", "taxable value", "tax amount", "igst", "cgst",
             "sgst", "bank", "ifsc", "declaration", "jurisdiction", "authorised", "pan", "subject",
-            "invoice", "terms of delivery", "mode/terms", "branch", "company", "output-"
+            "invoice", "terms of delivery", "mode/terms", "branch", "company", "output-", "seal nos",
+            "remarks", "gross", "tare", "nett", "credit period", "whether the tax", "invoice amt", "inv value"
     );
 
     public static final List<String> ITEM_STOP_KEYWORDS = List.of(
             "subtotal", "sub total", "tax", "taxable value", "grand total", "amount payable",
-            "invoice value", "net amount", "bank details", "declaration", "total tax amount"
+            "invoice value", "net amount", "bank details", "declaration", "total tax amount",
+            "amount chargeable", "tax amount (in words)", "seal nos", "remarks", "whether the tax",
+            "invoice amt", "inv value"
     );
 
     public static final List<String> TABLE_HEADER_KEYWORDS = List.of(
             "description", "item", "particular", "goods", "goods/services", "qty", "quantity",
             "rate", "amount", "hsn", "sac", "uom", "unit", "discount", "taxable", "value", "code"
+    );
+    private static final List<String> STRONG_TABLE_HEADER_KEYWORDS = List.of(
+            "description", "item", "particular", "goods", "goods/services", "qty", "quantity",
+            "rate", "amount", "hsn", "sac", "uom", "discount", "taxable"
     );
 
     private OcrLayoutUtil() {
@@ -84,11 +109,76 @@ public final class OcrLayoutUtil {
     }
 
     public static boolean isAddressLike(String text) {
-        return RegexUtil.containsAnyKeyword(text, ADDRESS_KEYWORDS);
+        String lower = text == null ? "" : text.toLowerCase(Locale.ROOT);
+        int hits = 0;
+        for (String keyword : ADDRESS_KEYWORDS) {
+            if (lower.contains(keyword)) {
+                hits++;
+            }
+        }
+        if (lower.matches(".*\\b\\d{5,6}\\b.*")) {
+            return true;
+        }
+        if (lower.contains("@") || lower.contains("www.") || lower.contains("http")) {
+            return true;
+        }
+        if (hits >= 2) {
+            return true;
+        }
+        return hits == 1 && (lower.contains(",") || lower.matches(".*\\d.*"));
     }
 
     public static boolean isLogisticsLike(String text) {
         return RegexUtil.containsAnyKeyword(text, BUYER_STOP_KEYWORDS) || RegexUtil.containsAnyKeyword(text, LOGISTICS_KEYWORDS);
+    }
+
+    public static boolean isGovernmentLike(String text) {
+        return RegexUtil.containsAnyKeyword(text, GOVERNMENT_KEYWORDS);
+    }
+
+    public static boolean hasBusinessSignal(String text) {
+        return RegexUtil.containsAnyKeyword(text, BUSINESS_KEYWORDS);
+    }
+
+    public static boolean isHeaderNoise(String text) {
+        return RegexUtil.containsAnyKeyword(text, HEADER_NOISE_KEYWORDS);
+    }
+
+    public static boolean isVoucherLike(String text) {
+        String lower = text == null ? "" : text.toLowerCase(Locale.ROOT);
+        return lower.contains("voucher") && !lower.contains("invoice");
+    }
+
+    public static boolean looksLikeMeaningfulUppercaseLine(String text) {
+        String normalized = RegexUtil.normalizeLine(text);
+        if (normalized.isBlank() || normalized.length() < 5 || !normalized.matches(".*[A-Za-z].*")) {
+            return false;
+        }
+        if (isAddressLike(normalized) || isLogisticsLike(normalized) || isHeaderNoise(normalized)) {
+            return false;
+        }
+        int letters = 0;
+        int uppercase = 0;
+        for (char ch : normalized.toCharArray()) {
+            if (Character.isLetter(ch)) {
+                letters++;
+                if (Character.isUpperCase(ch)) {
+                    uppercase++;
+                }
+            }
+        }
+        return letters >= 6 && uppercase >= Math.max(4, (letters * 3) / 5);
+    }
+
+    public static int countKeywordHits(String text, List<String> keywords) {
+        String lower = text == null ? "" : text.toLowerCase(Locale.ROOT);
+        int hits = 0;
+        for (String keyword : keywords) {
+            if (lower.contains(keyword.toLowerCase(Locale.ROOT))) {
+                hits++;
+            }
+        }
+        return hits;
     }
 
     public static boolean isNonItemLine(String text) {
@@ -101,20 +191,36 @@ public final class OcrLayoutUtil {
 
     public static boolean isBuyerSectionHeader(String text) {
         String lower = text == null ? "" : text.toLowerCase(Locale.ROOT);
-        return RegexUtil.containsAnyKeyword(lower, BUYER_SECTION_KEYWORDS)
-                && !lower.contains("buyer's order")
-                && !lower.contains("purchase order");
+        if (lower.contains("original for") || lower.contains("duplicate for")
+                || lower.contains("triplicate for") || lower.contains("supplier")) {
+            return false;
+        }
+        for (String fragment : fragments(text)) {
+            String fragmentLower = fragment.toLowerCase(Locale.ROOT);
+            boolean buyerKeyword = RegexUtil.containsAnyKeyword(fragmentLower, BUYER_SECTION_KEYWORDS)
+                    || isStandaloneToHeader(fragment);
+            if (buyerKeyword && !isOrderOrReferenceHeader(fragmentLower)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static boolean looksLikeTableHeader(String text) {
         String lower = text == null ? "" : text.toLowerCase(Locale.ROOT);
         int hits = 0;
+        int strongHits = 0;
         for (String keyword : TABLE_HEADER_KEYWORDS) {
             if (lower.contains(keyword)) {
                 hits++;
             }
         }
-        return hits >= 2;
+        for (String keyword : STRONG_TABLE_HEADER_KEYWORDS) {
+            if (lower.contains(keyword)) {
+                strongHits++;
+            }
+        }
+        return hits >= 2 && strongHits >= 2;
     }
 
     private static void splitBeforeMetadata(Set<String> parts, String text, List<String> keywords) {
@@ -143,5 +249,27 @@ public final class OcrLayoutUtil {
         if (!normalized.isEmpty()) {
             parts.add(normalized);
         }
+    }
+
+    private static boolean isStandaloneToHeader(String text) {
+        for (String fragment : fragments(text)) {
+            String normalized = RegexUtil.normalizeLine(fragment).toLowerCase(Locale.ROOT);
+            if (normalized.matches("^to[,:.]?$") || normalized.matches("^invoice to[,:.]?$")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isOrderOrReferenceHeader(String lower) {
+        return lower.contains("buyer's order")
+                || lower.contains("buyers order")
+                || lower.contains("buyer order")
+                || lower.contains("purchase order")
+                || lower.contains("order no")
+                || lower.contains("supplier's ref")
+                || lower.contains("supplier ref")
+                || lower.contains("dispatch doc")
+                || lower.contains("delivery note");
     }
 }

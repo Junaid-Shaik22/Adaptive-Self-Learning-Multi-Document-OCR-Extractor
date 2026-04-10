@@ -9,8 +9,18 @@ import java.util.Locale;
 
 public class VendorExtractor implements FieldExtractor<String> {
     private static final List<String> COMPANY_KEYWORDS = List.of(
-            "ltd", "limited", "pvt", "corporation", "industries", "enterprises", "solutions"
+            "ltd", "limited", "pvt", "private", "llp", "corporation", "industries",
+            "enterprises", "solutions", "engineering", "chemicals", "courier", "services",
+            "electronics", "hydraulics", "products", "bearing", "technosoft", "energy", "systems",
+            "company", "agency", "traders", "brothers", "associates", "logistics", "co"
     );
+    private static final List<String> TRIMMABLE_SUFFIX_KEYWORDS = List.of(
+            "ltd", "limited", "pvt", "private", "llp", "corporation", "industries",
+            "enterprises", "solutions", "systems", "company", "agency", "traders", "associates", "co"
+    );
+    private static final List<String> VENDOR_LABEL_KEYWORDS = List.of("vendor", "supplier", "seller", "from");
+    private static final int MIN_STRICT_SCORE = 90;
+    private static final int MIN_RELAXED_SCORE = 60;
 
     @Override
     public String extract(String[] lines, int[] zones) {
@@ -22,137 +32,261 @@ public class VendorExtractor implements FieldExtractor<String> {
     }
 
     public FieldExtractionResult<String> extractResult(LineIndexingService.Zones zones, String vendorGstin) {
-        FieldExtractionResult<String> nearGstin = findNearGstin(zones.topZone, vendorGstin);
-        if (nearGstin.getValue() != null) {
-            return nearGstin;
+        List<LineIndexingService.IndexedLine> headerLines = headerWindow(zones);
+        VendorCandidate strictCandidate = findBestScoredCandidate(headerLines, vendorGstin, true);
+        if (strictCandidate != null && strictCandidate.score >= MIN_STRICT_SCORE) {
+            return strictCandidate.toResult();
         }
 
-        FieldExtractionResult<String> keywordMatch = findBest(zones.topZone, true, "keyword");
-        if (keywordMatch.getValue() != null) {
-            return keywordMatch;
+        VendorCandidate nearGstin = findNearGstinCandidate(headerLines, vendorGstin);
+        if (nearGstin != null && nearGstin.score >= MIN_RELAXED_SCORE) {
+            return nearGstin.toResult();
         }
 
-        return findBest(zones.topZone, false, "fallback");
-    }
+        VendorCandidate relaxedCandidate = findBestScoredCandidate(headerLines, vendorGstin, false);
+        if (relaxedCandidate != null && relaxedCandidate.score >= MIN_RELAXED_SCORE) {
+            return relaxedCandidate.toResult();
+        }
 
-    private FieldExtractionResult<String> findNearGstin(List<LineIndexingService.IndexedLine> lines, String vendorGstin) {
-        if (vendorGstin == null) {
-            return new FieldExtractionResult<>(null, "fallback", null);
+        VendorCandidate uppercaseFallback = findUppercaseFallback(headerLines);
+        if (uppercaseFallback != null && uppercaseFallback.score >= MIN_RELAXED_SCORE) {
+            return uppercaseFallback.toResult();
         }
-        for (int i = 0; i < lines.size(); i++) {
-            if (!lines.get(i).getText().replaceAll("\\s+", "").contains(vendorGstin)) {
-                continue;
-            }
-            String best = null;
-            Integer lineNumber = null;
-            int bestScore = Integer.MIN_VALUE;
-            for (int j = Math.max(0, i - 10); j < i; j++) {
-                for (String candidate : OcrLayoutUtil.fragments(lines.get(j).getText())) {
-                    String sanitized = sanitizeCandidate(candidate);
-                    if (isValid(sanitized)) {
-                        boolean hasKeyword = containsCompanyKeyword(sanitized);
-                        int score = scoreCandidate(sanitized, hasKeyword, lines.get(j).getLineNumber());
-                        if (score > bestScore) {
-                            bestScore = score;
-                            best = sanitized;
-                            lineNumber = lines.get(j).getLineNumber();
-                        }
-                    }
-                }
-            }
-            if (best != null) {
-                return new FieldExtractionResult<>(best, containsCompanyKeyword(best) ? "keyword" : "regex", lineNumber);
-            }
-        }
+
         return new FieldExtractionResult<>(null, "fallback", null);
     }
 
-    private FieldExtractionResult<String> findBest(List<LineIndexingService.IndexedLine> lines, boolean requireCompanyKeyword, String method) {
-        String best = null;
-        Integer lineNumber = null;
-        int bestScore = Integer.MIN_VALUE;
+    private VendorCandidate findBestScoredCandidate(List<LineIndexingService.IndexedLine> lines,
+                                                    String vendorGstin,
+                                                    boolean strict) {
+        VendorCandidate best = null;
         for (LineIndexingService.IndexedLine line : lines) {
-            for (String text : OcrLayoutUtil.fragments(line.getText())) {
-                String sanitized = sanitizeCandidate(text);
-                if (!isValid(sanitized)) {
-                    continue;
-                }
-                boolean hasKeyword = containsCompanyKeyword(sanitized);
-                if (requireCompanyKeyword && !hasKeyword) {
-                    continue;
-                }
-                int score = scoreCandidate(sanitized, hasKeyword, line.getLineNumber());
-                if (score > bestScore) {
-                    bestScore = score;
-                    best = sanitized;
-                    lineNumber = line.getLineNumber();
+            for (String fragment : OcrLayoutUtil.fragments(line.getText())) {
+                VendorCandidate candidate = buildScoredCandidate(fragment, line, vendorGstin, strict, false);
+                if (candidate != null && (best == null || candidate.score > best.score)) {
+                    best = candidate;
                 }
             }
         }
-        return new FieldExtractionResult<>(best, best == null ? "fallback" : method, lineNumber);
+        return best;
+    }
+
+    private VendorCandidate findNearGstinCandidate(List<LineIndexingService.IndexedLine> lines, String vendorGstin) {
+        if (!RegexUtil.isValidGstin(vendorGstin)) {
+            return null;
+        }
+        String normalizedGstin = vendorGstin.replaceAll("\\s+", "").toUpperCase(Locale.ROOT);
+        int gstinIndex = -1;
+        for (int i = 0; i < lines.size(); i++) {
+            String compact = lines.get(i).getText().replaceAll("\\s+", "").toUpperCase(Locale.ROOT);
+            if (compact.contains(normalizedGstin)) {
+                gstinIndex = i;
+                break;
+            }
+        }
+        if (gstinIndex < 0) {
+            return null;
+        }
+
+        VendorCandidate best = null;
+        for (int i = Math.max(0, gstinIndex - 6); i <= Math.min(lines.size() - 1, gstinIndex + 1); i++) {
+            if (i == gstinIndex) {
+                continue;
+            }
+            String lower = lines.get(i).getText().toLowerCase(Locale.ROOT);
+            if (OcrLayoutUtil.isBuyerSectionHeader(lower)) {
+                continue;
+            }
+            for (String fragment : OcrLayoutUtil.fragments(lines.get(i).getText())) {
+                VendorCandidate candidate = buildScoredCandidate(fragment, lines.get(i), vendorGstin, false, true);
+                if (candidate != null) {
+                    candidate.score += Math.max(0, 35 - Math.abs(gstinIndex - i) * 8);
+                    candidate.method = candidate.score >= MIN_STRICT_SCORE ? "keyword" : "regex";
+                    if (best == null || candidate.score > best.score) {
+                        best = candidate;
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    private VendorCandidate findUppercaseFallback(List<LineIndexingService.IndexedLine> lines) {
+        VendorCandidate best = null;
+        for (int i = 0; i < Math.min(lines.size(), 8); i++) {
+            for (String fragment : OcrLayoutUtil.fragments(lines.get(i).getText())) {
+                String candidateText = sanitizeCandidate(fragment);
+                if (!isFallbackFriendly(candidateText)) {
+                    continue;
+                }
+                VendorCandidate candidate = new VendorCandidate(candidateText, "fallback", lines.get(i).getLineNumber());
+                candidate.score = 58 + Math.max(0, 16 - i * 2);
+                if (OcrLayoutUtil.looksLikeMeaningfulUppercaseLine(candidateText)) {
+                    candidate.score += 18;
+                }
+                if (containsCompanyKeyword(candidateText)) {
+                    candidate.score += 16;
+                    candidate.method = "keyword";
+                }
+                if (best == null || candidate.score > best.score) {
+                    best = candidate;
+                }
+            }
+        }
+        return best;
+    }
+
+    private VendorCandidate buildScoredCandidate(String rawValue,
+                                                 LineIndexingService.IndexedLine line,
+                                                 String vendorGstin,
+                                                 boolean strict,
+                                                 boolean proximityMode) {
+        String candidateText = sanitizeCandidate(rawValue);
+        if (!isValidScoredCandidate(candidateText, strict)) {
+            return null;
+        }
+
+        int score = scoreScoredCandidate(candidateText, line, vendorGstin, strict, proximityMode);
+        if (strict && score < MIN_STRICT_SCORE - 15) {
+            return null;
+        }
+        if (!strict && score < MIN_RELAXED_SCORE - 12) {
+            return null;
+        }
+
+        VendorCandidate candidate = new VendorCandidate(
+                candidateText,
+                score >= MIN_STRICT_SCORE || containsCompanyKeyword(candidateText) ? "keyword" : "regex",
+                line.getLineNumber()
+        );
+        candidate.score = score;
+        return candidate;
+    }
+
+    private boolean isValidScoredCandidate(String text, boolean strict) {
+        if (text == null || text.isBlank() || text.length() < 5 || text.length() > 120) {
+            return false;
+        }
+        if (!text.matches(".*[A-Za-z].*") || text.matches("^\\d+$")) {
+            return false;
+        }
+        String lower = text.toLowerCase(Locale.ROOT);
+        if (OcrLayoutUtil.isHeaderNoise(lower)
+                || OcrLayoutUtil.isVoucherLike(lower)
+                || OcrLayoutUtil.isGovernmentLike(lower)
+                || OcrLayoutUtil.isLogisticsLike(lower)
+                || lower.matches("^\\(?page\\s*\\d+\\)?$")
+                || lower.contains("page ")
+                || lower.contains("gstin")
+                || lower.contains("buyer")
+                || lower.contains("bill to")
+                || lower.contains("ship to")
+                || lower.contains("consignee")) {
+            return false;
+        }
+        if (text.trim().endsWith(":")) {
+            return false;
+        }
+        if (looksLikeAddressFragment(lower, text)) {
+            return false;
+        }
+        if (!containsYearSuffix(text) && !DateUtil.findCandidateDates(text).isEmpty()) {
+            return false;
+        }
+        int digits = digitCount(text);
+        int letters = letterCount(text);
+        if (digits > Math.max(2, letters / 3) && !containsCompanyKeyword(text) && !containsYearSuffix(text)) {
+            return false;
+        }
+        if (!hasMeaningfulWords(text, strict ? 2 : 1)) {
+            return false;
+        }
+        return containsCompanyKeyword(text) || OcrLayoutUtil.looksLikeMeaningfulUppercaseLine(text) || !strict;
+    }
+
+    private int scoreScoredCandidate(String text,
+                                     LineIndexingService.IndexedLine line,
+                                     String vendorGstin,
+                                     boolean strict,
+                                     boolean proximityMode) {
+        String lower = text.toLowerCase(Locale.ROOT);
+        int score = 38;
+        score += Math.max(0, 44 - line.getLineNumber() * 2);
+        score += containsCompanyKeyword(text) ? 34 : 0;
+        score += OcrLayoutUtil.hasBusinessSignal(lower) ? 18 : 0;
+        score += OcrLayoutUtil.looksLikeMeaningfulUppercaseLine(text) ? 16 : 0;
+        score += RegexUtil.containsAnyKeyword(lower, VENDOR_LABEL_KEYWORDS) ? 18 : 0;
+        score += lower.startsWith("m/s") ? 8 : 0;
+        if (RegexUtil.isValidGstin(vendorGstin)
+                && line.getText().replaceAll("\\s+", "").toUpperCase(Locale.ROOT).contains(vendorGstin.toUpperCase(Locale.ROOT))) {
+            score += 24;
+        }
+        if (proximityMode) {
+            score += 12;
+        }
+        if (containsYearSuffix(text)) {
+            score += 6;
+        }
+        if (text.contains(",")) {
+            score -= 8;
+        }
+        if (text.length() > 70) {
+            score -= 18;
+        } else if (text.length() > 45) {
+            score -= 8;
+        }
+        if (looksLikeAddressFragment(lower, text)) {
+            score -= 50;
+        }
+        if (OcrLayoutUtil.isGovernmentLike(lower)) {
+            score -= 105;
+        }
+        if (OcrLayoutUtil.isHeaderNoise(lower) || OcrLayoutUtil.isVoucherLike(lower)) {
+            score -= 95;
+        }
+        if (OcrLayoutUtil.isLogisticsLike(lower)) {
+            score -= 90;
+        }
+        if (!containsYearSuffix(text) && !DateUtil.findCandidateDates(text).isEmpty()) {
+            score -= 85;
+        }
+        if (!containsCompanyKeyword(text) && digitCount(text) > 0) {
+            score -= 26;
+        }
+        if (strict && !containsCompanyKeyword(text) && !OcrLayoutUtil.looksLikeMeaningfulUppercaseLine(text)) {
+            score -= 28;
+        }
+        return score;
+    }
+
+    private boolean isFallbackFriendly(String text) {
+        if (!isValidScoredCandidate(text, false)) {
+            return false;
+        }
+        String lower = text.toLowerCase(Locale.ROOT);
+        return !looksLikeAddressFragment(lower, text)
+                && !OcrLayoutUtil.isGovernmentLike(lower)
+                && !OcrLayoutUtil.isHeaderNoise(lower);
     }
 
     private boolean containsCompanyKeyword(String txt) {
         return RegexUtil.containsAnyKeyword(txt.toLowerCase(Locale.ROOT), COMPANY_KEYWORDS);
     }
 
-    private boolean isValid(String txt) {
-        if (txt == null || txt.length() < 5 || txt.length() > 120) {
-            return false;
-        }
-        String lower = txt.toLowerCase(Locale.ROOT);
-        if (lower.contains("invoice") || lower.contains("tax") || lower.contains("bill") || lower.contains("gstin")
-                || lower.contains("date") || lower.contains("bank") || lower.contains("ship to")
-                || lower.contains("consignee") || lower.contains("buyer") || lower.contains("department")
-                || lower.contains("reference")) {
-            return false;
-        }
-        if (!DateUtil.findCandidateDates(txt).isEmpty()) {
-            return false;
-        }
-        if (OcrLayoutUtil.isAddressLike(lower)) {
-            return false;
-        }
-        if (OcrLayoutUtil.isLogisticsLike(lower)) {
-            return false;
-        }
-        if (!txt.matches(".*[A-Za-z].*")) {
-            return false;
-        }
-        String[] words = txt.trim().split("\\s+");
-        int wordCount = 0;
-        for (String word : words) {
-            if (word.matches(".*[A-Za-z].*")) {
-                wordCount++;
-            }
-        }
-        return wordCount >= 2 && !txt.matches("\\d+");
-    }
-
-    private int scoreCandidate(String text, boolean hasKeyword, int lineNumber) {
-        int score = 0;
-        if (hasKeyword) {
-            score += 60;
-        }
-        score += Math.max(0, 40 - lineNumber);
-        score += Math.max(0, 40 - text.length());
-        if (OcrLayoutUtil.isAddressLike(text.toLowerCase(Locale.ROOT))) {
-            score -= 60;
-        }
-        if (text.contains(",")) {
-            score -= 20;
-        }
-        if (!DateUtil.findCandidateDates(text).isEmpty()) {
-            score -= 80;
-        }
-        return score;
-    }
-
     private String sanitizeCandidate(String value) {
         String normalized = RegexUtil.normalizeLine(value);
+        normalized = normalized.replaceAll("^[^A-Za-z0-9]+", "").trim();
+        normalized = normalized.replaceFirst("(?i)^\\(?\\s*(?:tax\\s+invoice|invoice|e-?invoice|voucher)\\s*\\)?\\s*", "");
+        normalized = normalized.replaceAll("(?i)^(?:original|duplicate|triplicate|extra)\\s+for\\s+[A-Za-z/ ]+", "").trim();
+        normalized = normalized.replaceFirst("(?i)^.*?\\b(?:m/s\\.?|seller|supplier|vendor|from|for)\\b\\s*[:#-]*\\s*", "");
         normalized = OcrLayoutUtil.truncateAtKeyword(normalized, OcrLayoutUtil.HEADER_METADATA_KEYWORDS);
         normalized = OcrLayoutUtil.truncateAtKeyword(normalized, OcrLayoutUtil.BUYER_STOP_KEYWORDS);
         normalized = normalized.replaceAll("(?i)^tax invoice\\s*", "").trim();
+        normalized = normalized.replaceAll("(?i)^(?:tin\\s*no|gst\\s*no|pan\\s*no|cst)\\s*[:#-]*\\s*", "").trim();
+        normalized = normalized.replaceFirst("(?i)\\b(?:gstin|gstin/uin|gst no|tin no|pan no)\\b.*$", "").trim();
+        normalized = normalized.replaceFirst("(?i)\\b(?:invoice\\s*no|invoice\\s*number|dated|date|ref\\.?\\s*no|order\\s*no)\\b.*$", "").trim();
+        normalized = normalized.replaceFirst("(?i)^\\(?page\\s*\\d+\\)?$", "").trim();
+        normalized = normalized.replaceFirst("\\s*[-:|]+\\s*$", "").trim();
 
         String lower = normalized.toLowerCase(Locale.ROOT);
         int suffixIndex = lastCompanySuffixIndex(lower);
@@ -164,17 +298,104 @@ public class VendorExtractor implements FieldExtractor<String> {
                 normalized = normalized.replaceFirst("(?i)(\\b(?:ltd|limited|llp)\\b).*$", "$1").trim();
             }
         }
+        normalized = normalized.replaceFirst("\\s*[-–]\\s*\\(\\d{4}[-/]\\d{2,4}\\)\\s*$", "").trim();
+        normalized = normalized.replaceAll("\\s{2,}", " ").trim();
         return normalized.replaceAll("\\s+[a-z]{1,3}$", "").trim();
+    }
+
+    private boolean hasMeaningfulWords(String text, int minimumWords) {
+        int meaningfulWords = 0;
+        for (String word : text.split("\\s+")) {
+            String alpha = word.replaceAll("[^A-Za-z]", "");
+            if (alpha.length() >= 3) {
+                meaningfulWords++;
+            }
+        }
+        return meaningfulWords >= minimumWords;
+    }
+
+    private boolean containsYearSuffix(String text) {
+        return text != null && text.matches(".*\\(\\d{4}[-/]\\d{2,4}\\).*");
+    }
+
+    private int digitCount(String value) {
+        int digits = 0;
+        for (char ch : value.toCharArray()) {
+            if (Character.isDigit(ch)) {
+                digits++;
+            }
+        }
+        return digits;
+    }
+
+    private int letterCount(String value) {
+        int letters = 0;
+        for (char ch : value.toCharArray()) {
+            if (Character.isLetter(ch)) {
+                letters++;
+            }
+        }
+        return letters;
     }
 
     private int lastCompanySuffixIndex(String lower) {
         int best = -1;
-        for (String keyword : COMPANY_KEYWORDS) {
+        for (String keyword : TRIMMABLE_SUFFIX_KEYWORDS) {
             int index = lower.lastIndexOf(keyword);
             if (index > best) {
                 best = index;
             }
         }
         return best;
+    }
+
+    private List<LineIndexingService.IndexedLine> headerWindow(LineIndexingService.Zones zones) {
+        List<LineIndexingService.IndexedLine> header = new java.util.ArrayList<>();
+        int headerEnd = zones.getHeaderEndLine() > 0 ? zones.getHeaderEndLine() : 25;
+        int cutoff = zones.getTableHeaderLine() == null ? Integer.MAX_VALUE : zones.getTableHeaderLine().getLineNumber();
+        for (LineIndexingService.IndexedLine line : zones.allLines) {
+            String lower = line.getText().toLowerCase(Locale.ROOT);
+            if (line.getLineNumber() > headerEnd || line.getLineNumber() >= cutoff) {
+                break;
+            }
+            if (line.getLineNumber() > 1 && OcrLayoutUtil.isBuyerSectionHeader(lower)) {
+                break;
+            }
+            header.add(line);
+        }
+        return header.isEmpty() ? zones.topZone : header;
+    }
+
+    private boolean looksLikeAddressFragment(String lower, String text) {
+        int addressHits = 0;
+        for (String keyword : OcrLayoutUtil.ADDRESS_KEYWORDS) {
+            if (lower.contains(keyword)) {
+                addressHits++;
+            }
+        }
+        if (text.matches(".*\\b\\d{5,6}\\b.*")) {
+            return true;
+        }
+        if (addressHits >= 2) {
+            return true;
+        }
+        return addressHits >= 1 && (text.contains(",") || text.matches(".*\\d.*"));
+    }
+
+    private static class VendorCandidate {
+        private final String value;
+        private String method;
+        private final Integer lineNumber;
+        private int score;
+
+        private VendorCandidate(String value, String method, Integer lineNumber) {
+            this.value = value;
+            this.method = method;
+            this.lineNumber = lineNumber;
+        }
+
+        private FieldExtractionResult<String> toResult() {
+            return new FieldExtractionResult<>(value, method, lineNumber);
+        }
     }
 }

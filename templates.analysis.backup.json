@@ -24,20 +24,26 @@
   "templateId" : "143a99ea-a706-47ae-9c7f-70b0c4aa4fba",
   "vendorName" : "Ranco Industries (2022-2023)",
   "vendorGstin" : "24AAEFR7351M1ZW",
-  "signature" : "90f32693e490260b7f27e2c156db1341",
-  "layoutSignature" : "4e8f61834f78aee4d621160d835ed8fa",
-  "version" : 3,
-  "qualityScore" : 0.9800000000000001,
+  "signature" : "1c7669c4f201c9acbc1680e84639b72b",
+  "layoutSignature" : null,
+  "version" : 2,
+  "qualityScore" : 0.0,
   "fieldPositions" : {
     "totalAmount" : {
       "lineNumber" : 28,
-      "relativePosition" : 2,
+      "relativePosition" : 5,
       "zone" : "BOTTOM",
       "keyword" : "total"
     },
+    "buyerGstin" : {
+      "lineNumber" : 9,
+      "relativePosition" : -1,
+      "zone" : "MIDDLE",
+      "keyword" : null
+    },
     "taxLine" : {
       "lineNumber" : 31,
-      "relativePosition" : 5,
+      "relativePosition" : 8,
       "zone" : "BOTTOM",
       "keyword" : "igst"
     },
@@ -49,15 +55,9 @@
     },
     "subTotal" : {
       "lineNumber" : 34,
-      "relativePosition" : 8,
+      "relativePosition" : 11,
       "zone" : "BOTTOM",
       "keyword" : null
-    },
-    "totalLine" : {
-      "lineNumber" : 28,
-      "relativePosition" : 2,
-      "zone" : "BOTTOM",
-      "keyword" : "total"
     },
     "invoiceDate" : {
       "lineNumber" : 3,
@@ -72,14 +72,14 @@
       "keyword" : "industries"
     },
     "buyerName" : {
-      "lineNumber" : 18,
-      "relativePosition" : 8,
+      "lineNumber" : 19,
+      "relativePosition" : 9,
       "zone" : "MIDDLE",
       "keyword" : "bill to"
     },
     "taxAmount" : {
       "lineNumber" : 34,
-      "relativePosition" : 8,
+      "relativePosition" : 11,
       "zone" : "BOTTOM",
       "keyword" : null
     },
@@ -518,16 +518,16 @@
   }
 }, {
   "templateId" : "c54f96b7-3f02-449b-9647-db7342e13ae1",
-  "vendorName" : "DEPARTMENT OF ATOMIC. ENERGY",
+  "vendorName" : "Inwice No.",
   "vendorGstin" : "27BLPPS1385F1ZM",
   "signature" : "f927b5968cc050454a403fbf7259f967",
-  "layoutSignature" : "30876f3bb62bb8a9e4bdebd1c400a8ab",
+  "layoutSignature" : "9cfaeb868f7a98eb15e8584cf9357dd6",
   "version" : 3,
-  "qualityScore" : 0.88,
+  "qualityScore" : 0.8700000000000001,
   "fieldPositions" : {
     "totalAmount" : {
       "lineNumber" : 23,
-      "relativePosition" : 22,
+      "relativePosition" : 2,
       "zone" : "BOTTOM",
       "keyword" : null
     },
@@ -539,14 +539,8 @@
     },
     "taxLine" : {
       "lineNumber" : 36,
-      "relativePosition" : 35,
+      "relativePosition" : 15,
       "zone" : "BOTTOM",
-      "keyword" : null
-    },
-    "invoiceNumber" : {
-      "lineNumber" : 3,
-      "relativePosition" : 2,
-      "zone" : "TOP",
       "keyword" : null
     },
     "invoiceDate" : {
@@ -556,8 +550,8 @@
       "keyword" : "date"
     },
     "vendorName" : {
-      "lineNumber" : 10,
-      "relativePosition" : 9,
+      "lineNumber" : 9,
+      "relativePosition" : 8,
       "zone" : "TOP",
       "keyword" : null
     },
@@ -569,82 +563,6 @@
     },
     "tableHeader" : {
       "lineNumber" : 22,
-      "relativePosition" : -1,
-      "zone" : "TABLE",
-      "keyword" : null
-    }
-  }
-}, {
-  "templateId" : "35fbab90-5a38-4b55-9f5a-c20ecc145f6d",
-  "vendorName" : "Mysore Ammonia and Chemicals Limited",
-  "vendorGstin" : "36AABCC0037H1Z5",
-  "signature" : "439855daf3690b2a7401f6d38067a56a",
-  "layoutSignature" : "5cbed7ba8163720bde3119e462b4530e",
-  "version" : 3,
-  "qualityScore" : 1.0,
-  "fieldPositions" : {
-    "totalAmount" : {
-      "lineNumber" : 29,
-      "relativePosition" : 2,
-      "zone" : "BOTTOM",
-      "keyword" : "total"
-    },
-    "buyerGstin" : {
-      "lineNumber" : 23,
-      "relativePosition" : 6,
-      "zone" : "MIDDLE",
-      "keyword" : "gstin"
-    },
-    "taxLine" : {
-      "lineNumber" : 31,
-      "relativePosition" : 4,
-      "zone" : "BOTTOM",
-      "keyword" : null
-    },
-    "invoiceNumber" : {
-      "lineNumber" : 10,
-      "relativePosition" : 9,
-      "zone" : "TOP",
-      "keyword" : "invoice no"
-    },
-    "totalLine" : {
-      "lineNumber" : 29,
-      "relativePosition" : 2,
-      "zone" : "BOTTOM",
-      "keyword" : "total"
-    },
-    "invoiceDate" : {
-      "lineNumber" : 12,
-      "relativePosition" : 11,
-      "zone" : "TOP",
-      "keyword" : "date"
-    },
-    "vendorName" : {
-      "lineNumber" : 3,
-      "relativePosition" : 2,
-      "zone" : "TOP",
-      "keyword" : "limited"
-    },
-    "buyerName" : {
-      "lineNumber" : 17,
-      "relativePosition" : 0,
-      "zone" : "MIDDLE",
-      "keyword" : "consignee"
-    },
-    "taxAmount" : {
-      "lineNumber" : 27,
-      "relativePosition" : 0,
-      "zone" : "BOTTOM",
-      "keyword" : "cgst"
-    },
-    "vendorGstin" : {
-      "lineNumber" : 9,
-      "relativePosition" : 8,
-      "zone" : "TOP",
-      "keyword" : "gstin"
-    },
-    "tableHeader" : {
-      "lineNumber" : 24,
       "relativePosition" : -1,
       "zone" : "TABLE",
       "keyword" : null

@@ -84,18 +84,29 @@ public class TemplateExtractionServiceImpl implements TemplateExtractionService 
 
     private String extractGstin(List<LineIndexingService.IndexedLine> lines) {
         for (LineIndexingService.IndexedLine line : lines) {
-            Matcher matcher = RegexUtil.GSTIN_PATTERN.matcher(line.getText().replaceAll("\\s+", ""));
-            if (matcher.find()) {
-                String gstin = matcher.group().toUpperCase();
-                if (RegexUtil.isValidGstin(gstin)) {
-                    return gstin;
+            for (String fragment : com.invoice.extractor.util.OcrLayoutUtil.fragments(line.getText())) {
+                Matcher matcher = RegexUtil.GSTIN_PATTERN.matcher(fragment.replaceAll("\\s+", ""));
+                if (matcher.find()) {
+                    String gstin = matcher.group().toUpperCase();
+                    if (RegexUtil.isValidGstin(gstin)) {
+                        return gstin;
+                    }
                 }
-            }
-            Matcher tokenMatcher = RegexUtil.GSTIN_TOKEN_PATTERN.matcher(line.getText().replaceAll("\\s+", ""));
-            while (tokenMatcher.find()) {
-                String repaired = RegexUtil.repairGstinCandidate(tokenMatcher.group());
-                if (RegexUtil.isValidGstin(repaired)) {
-                    return repaired;
+                Matcher tokenMatcher = RegexUtil.GSTIN_TOKEN_PATTERN.matcher(fragment.replaceAll("\\s+", ""));
+                while (tokenMatcher.find()) {
+                    String repaired = RegexUtil.repairGstinCandidate(tokenMatcher.group());
+                    if (RegexUtil.isValidGstin(repaired)) {
+                        return repaired;
+                    }
+                }
+                String compact = fragment.replaceAll("[^A-Za-z0-9]", "").toUpperCase();
+                if (compact.length() > 15 && compact.length() <= 18) {
+                    for (int start = 0; start <= compact.length() - 15; start++) {
+                        String repaired = RegexUtil.repairGstinCandidate(compact.substring(start, start + 15));
+                        if (RegexUtil.isValidGstin(repaired)) {
+                            return repaired;
+                        }
+                    }
                 }
             }
         }

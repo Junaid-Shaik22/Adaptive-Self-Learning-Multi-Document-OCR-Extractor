@@ -28,6 +28,8 @@ public class LineIndexingService {
         private IndexedLine tableHeaderLine;
         private IndexedLine totalLine;
         private IndexedLine taxLine;
+        private int headerEndLine;
+        private int footerStartLine;
 
         public List<IndexedLine> getZone(String zoneName) {
             if (zoneName == null) {
@@ -65,6 +67,43 @@ public class LineIndexingService {
         public void setTaxLine(IndexedLine taxLine) {
             this.taxLine = taxLine;
         }
+
+        public int getHeaderEndLine() {
+            return headerEndLine;
+        }
+
+        public void setHeaderEndLine(int headerEndLine) {
+            this.headerEndLine = headerEndLine;
+        }
+
+        public int getFooterStartLine() {
+            return footerStartLine;
+        }
+
+        public void setFooterStartLine(int footerStartLine) {
+            this.footerStartLine = footerStartLine;
+        }
+
+        public String zoneForLineNumber(Integer lineNumber) {
+            if (lineNumber == null || allLines.isEmpty()) {
+                return "UNKNOWN";
+            }
+            if (lineNumber <= headerEndLine) {
+                return "TOP";
+            }
+            if (lineNumber >= footerStartLine) {
+                return "BOTTOM";
+            }
+            if (tableHeaderLine != null && lineNumber >= tableHeaderLine.getLineNumber()
+                    && (totalLine == null || lineNumber < totalLine.getLineNumber())) {
+                return "TABLE";
+            }
+            return "MIDDLE";
+        }
+
+        public int totalLines() {
+            return allLines.size();
+        }
     }
 
     public static Zones indexLinesAndZones(String ocrText) {
@@ -78,18 +117,20 @@ public class LineIndexingService {
         }
         Zones zones = new Zones();
         zones.allLines.addAll(indexed);
-        // Top Zone: first 15 lines
-        for (int i = 0; i < Math.min(15, indexed.size()); i++) {
-            zones.topZone.add(indexed.get(i));
-        }
-        // Bottom Zone: last 30 lines to tolerate OCR line over-segmentation near totals and summary boxes.
-        for (int i = Math.max(0, indexed.size() - 30); i < indexed.size(); i++) {
-            zones.bottomZone.add(indexed.get(i));
-        }
-
         int tableHeaderIdx = findTableHeaderIndex(indexed);
         int totalIdx = findTotalLineIndex(indexed, tableHeaderIdx);
         int taxIdx = findTaxLineIndex(indexed);
+        int headerSize = computeHeaderSize(indexed.size(), tableHeaderIdx);
+        int footerStartIdx = computeFooterStartIndex(indexed.size(), totalIdx);
+
+        for (int i = 0; i < Math.min(headerSize, indexed.size()); i++) {
+            zones.topZone.add(indexed.get(i));
+        }
+        for (int i = Math.max(0, footerStartIdx); i < indexed.size(); i++) {
+            zones.bottomZone.add(indexed.get(i));
+        }
+        zones.setHeaderEndLine(zones.topZone.isEmpty() ? 0 : zones.topZone.get(zones.topZone.size() - 1).getLineNumber());
+        zones.setFooterStartLine(zones.bottomZone.isEmpty() ? indexed.size() + 1 : zones.bottomZone.get(0).getLineNumber());
 
         if (tableHeaderIdx >= 0) {
             zones.setTableHeaderLine(indexed.get(tableHeaderIdx));
@@ -102,19 +143,19 @@ public class LineIndexingService {
         }
 
         if (tableHeaderIdx != -1) {
-            int tableEnd = totalIdx != -1 && totalIdx > tableHeaderIdx ? totalIdx : indexed.size();
+            int tableEnd = totalIdx != -1 && totalIdx > tableHeaderIdx ? totalIdx : footerStartIdx;
             for (int i = tableHeaderIdx + 1; i < tableEnd; i++) {
                 zones.tableZone.add(indexed.get(i));
             }
         }
 
-        buildMiddleZone(indexed, zones, tableHeaderIdx, totalIdx);
+        buildMiddleZone(indexed, zones, tableHeaderIdx, totalIdx, footerStartIdx);
         return zones;
     }
 
-    private static void buildMiddleZone(List<IndexedLine> indexed, Zones zones, int tableHeaderIdx, int totalIdx) {
+    private static void buildMiddleZone(List<IndexedLine> indexed, Zones zones, int tableHeaderIdx, int totalIdx, int footerStartIdx) {
         Set<Integer> middleIndexes = new LinkedHashSet<>();
-        int upperLimit = tableHeaderIdx >= 0 ? tableHeaderIdx : (totalIdx >= 0 ? totalIdx : indexed.size());
+        int upperLimit = tableHeaderIdx >= 0 ? tableHeaderIdx : (totalIdx >= 0 ? totalIdx : footerStartIdx);
 
         for (int i = 0; i < indexed.size(); i++) {
             String lower = indexed.get(i).getText().toLowerCase(Locale.ROOT);
@@ -130,7 +171,7 @@ public class LineIndexingService {
         }
 
         if (middleIndexes.isEmpty()) {
-            int start = Math.min(15, indexed.size());
+            int start = Math.min(Math.max(0, zones.topZone.size()), indexed.size());
             int end = Math.max(start, upperLimit);
             for (int i = start; i < end; i++) {
                 middleIndexes.add(i);
@@ -144,6 +185,25 @@ public class LineIndexingService {
 
     private static boolean isBuyerAnchor(String text) {
         return OcrLayoutUtil.isBuyerSectionHeader(text);
+    }
+
+    private static int computeHeaderSize(int totalLines, int tableHeaderIdx) {
+        int computed = Math.max(12, (int) Math.ceil(totalLines * 0.25));
+        computed = Math.min(25, computed);
+        if (tableHeaderIdx > 0) {
+            computed = Math.min(computed, tableHeaderIdx + 1);
+        }
+        return Math.max(1, Math.min(computed, totalLines));
+    }
+
+    private static int computeFooterStartIndex(int totalLines, int totalIdx) {
+        int footerSize = Math.max(15, (int) Math.ceil(totalLines * 0.30));
+        footerSize = Math.min(40, footerSize);
+        int start = Math.max(0, totalLines - footerSize);
+        if (totalIdx >= 0) {
+            start = Math.min(start, Math.max(0, totalIdx - 2));
+        }
+        return Math.max(0, Math.min(start, totalLines));
     }
 
     private static int findTableHeaderIndex(List<IndexedLine> indexed) {
@@ -194,8 +254,13 @@ public class LineIndexingService {
             String lower = indexed.get(i).getText().toLowerCase(Locale.ROOT);
             if (RegexUtil.containsAnyKeyword(lower, List.of(
                     "grand total", "invoice value", "total invoice value", "amount payable",
-                    "total amount", "total amount after tax", "net amount", "subtotal", "taxable value", "value (figure)"
+                    "total amount", "total amount after tax", "total to be taxed", "net amount",
+                    "subtotal", "taxable value", "value (figure)", "total after tax",
+                    "invoice amt", "inv value", "invoice amount"
             ))) {
+                return i;
+            }
+            if (lower.matches("^total\\b.*") && !lower.contains("to be taxed")) {
                 return i;
             }
         }

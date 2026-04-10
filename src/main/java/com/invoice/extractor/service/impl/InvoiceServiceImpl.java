@@ -22,6 +22,7 @@ import com.invoice.extractor.template.TemplateField;
 import com.invoice.extractor.util.AmountUtil;
 import com.invoice.extractor.util.ConfidenceCalculator;
 import com.invoice.extractor.util.DateUtil;
+import com.invoice.extractor.util.OcrLayoutUtil;
 import com.invoice.extractor.util.RegexUtil;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -68,8 +69,8 @@ public class InvoiceServiceImpl implements InvoiceService {
         InvoiceData data = new InvoiceData();
         data.setInvoiceNumber(resolveField("invoiceNumber", templateData.getInvoiceNumber(), this::isValidInvoiceNumber, generic.invoiceNumber, extractionMethod));
         data.setInvoiceDate(resolveField("invoiceDate", templateData.getInvoiceDate(), DateUtil::isValidInvoiceDate, generic.invoiceDate, extractionMethod));
-        data.setVendorName(resolveField("vendor", templateData.getVendorName(), this::isValidName, generic.vendorName, extractionMethod));
-        data.setBuyerName(resolveField("buyer", templateData.getBuyerName(), this::isValidName, generic.buyerName, extractionMethod));
+        data.setVendorName(resolveField("vendor", templateData.getVendorName(), this::isValidVendorName, generic.vendorName, extractionMethod));
+        data.setBuyerName(resolveField("buyer", templateData.getBuyerName(), this::isValidBuyerName, generic.buyerName, extractionMethod));
         data.setVendorGstin(resolveField("gstin", templateData.getVendorGstin(), this::isValidGstin,
                 resultOf(generic.gstins.getVendorGstin(), generic.gstins.getVendorMethod(), generic.gstins.getVendorLineNumber()), extractionMethod));
         data.setBuyerGstin(resolveField("buyerGstin", templateData.getBuyerGstin(), this::isValidGstin,
@@ -84,12 +85,19 @@ public class InvoiceServiceImpl implements InvoiceService {
         }
 
         normalizeAmounts(data, extractionMethod, generic, zones);
+        data.setLineItems(sanitizeLineItems(data.getLineItems(), data.getSubTotal(), data.getTotalAmount()));
+        reconcileIdentityFields(data, generic, extractionMethod);
+        normalizeEntityAssignments(data);
+        scrubInvalidIdentityFields(data);
 
         double confidence = ConfidenceCalculator.calculate(data, extractionMethod);
         data.setConfidenceScore(confidence);
-        data.setStatus(shouldRequireReview(data, rawText, confidence) ? "REVIEW_REQUIRED" : "SUCCESS");
+        data.setStatus(determineStatus(data, zones, rawText, confidence));
         if (shouldLearnTemplate(template, data, confidence, zones, generic.templateFields)) {
-            templateLearningService.learnTemplate(rawText, data, signature, generic.templateFields);
+            Template learnedTemplate = templateLearningService.learnTemplate(rawText, data, signature, generic.templateFields);
+            if (learnedTemplate != null) {
+                data.setTemplateId(learnedTemplate.getTemplateId());
+            }
         }
         return data;
     }
@@ -241,11 +249,21 @@ public class InvoiceServiceImpl implements InvoiceService {
         Double total = AmountUtil.parseAmount(data.getTotalAmount());
         Double tax = AmountUtil.parseAmount(data.getTaxAmount());
         Double subtotal = AmountUtil.parseAmount(data.getSubTotal());
+        Double wordsTotal = AmountUtil.extractAmountFromWords(zones.bottomZone, AmountUtil.TOTAL_KEYWORDS);
 
         if (total == null || !isLargestAmountInBottomZone(total, zones)) {
             data.setTotalAmount(generic.totalAmount.getValue());
             extractionMethod.put("total", generic.totalAmount.getMethod());
             total = AmountUtil.parseAmount(data.getTotalAmount());
+        }
+        if (wordsTotal != null
+                && (total == null
+                || (subtotal != null && total <= subtotal)
+                || (tax != null && subtotal != null && !isAmountConsistent(subtotal, tax, total)
+                && isAmountConsistent(subtotal, tax, wordsTotal)))) {
+            total = wordsTotal;
+            data.setTotalAmount(AmountUtil.formatAmount(total));
+            extractionMethod.put("total", "fallback");
         }
         if (tax != null && total != null && tax >= total) {
             tax = AmountUtil.parseAmount(generic.taxAmount.getValue());
@@ -260,6 +278,7 @@ public class InvoiceServiceImpl implements InvoiceService {
             } else {
                 data.setSubTotal(generic.subTotal.getValue());
                 extractionMethod.put("subtotal", generic.subTotal.getMethod());
+                subtotal = AmountUtil.parseAmount(data.getSubTotal());
             }
         }
         if ((tax == null || tax <= 0) && total != null && subtotal != null && subtotal < total) {
@@ -267,13 +286,65 @@ public class InvoiceServiceImpl implements InvoiceService {
             extractionMethod.put("tax", "fallback");
             tax = AmountUtil.parseAmount(data.getTaxAmount());
         }
+        Double lineItemSum = sumLineItemAmounts(data.getLineItems());
+        if (lineItemSum != null) {
+            boolean preferLineItemSubtotal = subtotal == null
+                    || subtotal <= 0
+                    || (total != null && subtotal > total)
+                    || (tax != null && total != null
+                    && AmountUtil.approximatelyEquals(total, lineItemSum)
+                    && lineItemSum > subtotal);
+            if (preferLineItemSubtotal && (total == null || lineItemSum <= total * 1.1 || tax != null)) {
+                subtotal = lineItemSum;
+                data.setSubTotal(AmountUtil.formatAmount(subtotal));
+                extractionMethod.put("subtotal", "fallback");
+            }
+            if (tax != null && tax > 0) {
+                Double recomputedFromItems = lineItemSum + tax;
+                boolean totalLooksLikeTaxableValue = total == null
+                        || total <= lineItemSum
+                        || AmountUtil.approximatelyEquals(total, lineItemSum)
+                        || !isAmountConsistent(lineItemSum, tax, total);
+                if (totalLooksLikeTaxableValue && bottomZoneContainsAmount(recomputedFromItems, zones)) {
+                    total = recomputedFromItems;
+                    subtotal = lineItemSum;
+                    data.setSubTotal(AmountUtil.formatAmount(subtotal));
+                    data.setTotalAmount(AmountUtil.formatAmount(total));
+                    extractionMethod.put("subtotal", "fallback");
+                    extractionMethod.put("total", "fallback");
+                }
+            }
+        }
         if (total != null && subtotal != null && tax != null && !isAmountConsistent(subtotal, tax, total)) {
             Double recomputedTotal = subtotal + tax;
-            if (isLargestAmountInBottomZone(total, zones) && isLargestAmountInBottomZone(recomputedTotal, zones)) {
+            if (bottomZoneContainsAmount(recomputedTotal, zones)
+                    || (lineItemSum != null && AmountUtil.approximatelyEquals(lineItemSum, subtotal) && recomputedTotal > subtotal)) {
                 data.setTotalAmount(AmountUtil.formatAmount(recomputedTotal));
                 extractionMethod.put("total", "fallback");
                 total = recomputedTotal;
             }
+        }
+        if (wordsTotal != null && tax != null && wordsTotal > tax && (total == null || !AmountUtil.approximatelyEquals(total, wordsTotal))) {
+            total = wordsTotal;
+            data.setTotalAmount(AmountUtil.formatAmount(total));
+            extractionMethod.put("total", "fallback");
+        }
+        if (wordsTotal != null && tax != null && wordsTotal > tax
+                && (subtotal == null || !isAmountConsistent(subtotal, tax, wordsTotal))) {
+            subtotal = wordsTotal - tax;
+            if (subtotal > 0 && subtotal < wordsTotal) {
+                data.setSubTotal(AmountUtil.formatAmount(subtotal));
+                extractionMethod.put("subtotal", "fallback");
+            }
+        }
+        if (subtotal != null) {
+            data.setSubTotal(AmountUtil.formatAmount(subtotal));
+        }
+        if (tax != null) {
+            data.setTaxAmount(AmountUtil.formatAmount(tax));
+        }
+        if (total != null) {
+            data.setTotalAmount(AmountUtil.formatAmount(total));
         }
     }
 
@@ -286,8 +357,22 @@ public class InvoiceServiceImpl implements InvoiceService {
             return false;
         }
         String normalized = RegexUtil.repairInvoiceNumberCandidate(value);
-        return RegexUtil.INVOICE_NUMBER_TOKEN_PATTERN.matcher(normalized).matches()
-                && !DateUtil.isValidInvoiceDate(normalized);
+        if (!RegexUtil.INVOICE_NUMBER_TOKEN_PATTERN.matcher(normalized).matches()
+                || DateUtil.isValidInvoiceDate(normalized)) {
+            return false;
+        }
+        String lookalike = normalized.toUpperCase()
+                .replace('0', 'O')
+                .replace('1', 'I')
+                .replace('7', 'T')
+                .replace('5', 'S')
+                .replace('8', 'B');
+        if (lookalike.matches("^(INVOICE.*|VOUCHER.*|DATE.*|FOR|ORIGINAL.*|DUPLICATE.*|RECEIVER.*|SUPPLY.*|STORE.*|MATERIAL.*|ENTERPRISE.*|STATE.*|STATION.*|TOTAL.*|AMOUNT.*)$")) {
+            return false;
+        }
+        return normalized.contains("/") || normalized.contains("-")
+                || normalized.matches("^\\d{3,12}$")
+                || normalized.matches("^[A-Z]{1,4}\\d{2,10}[A-Z]?$");
     }
 
     private boolean isValidGstin(String value) {
@@ -325,6 +410,42 @@ public class InvoiceServiceImpl implements InvoiceService {
         return !lower.contains("invoice no") && !lower.contains("dated");
     }
 
+    private boolean isValidVendorName(String value) {
+        if (!isValidName(value)) {
+            return false;
+        }
+        String lower = value.toLowerCase();
+        if (lower.contains("description") || lower.contains("goods") || lower.contains("invoice details")
+                || lower.contains("dispatch") || lower.contains("delivery note") || lower.contains("mode/terms")
+                || lower.contains("reference no") || lower.contains("bank") || lower.contains("ifsc")
+                || lower.contains("account") || lower.contains("ack no") || lower.contains("ack date")
+                || lower.contains("consignee") || lower.contains("bill to") || lower.contains("billed to")
+                || lower.contains("ship to") || lower.contains("buyer") || lower.contains("department of atomic energy")) {
+            return false;
+        }
+        if (lower.contains("manager") || lower.contains("officer") || lower.contains("directorate")
+                || lower.contains("purchase") || lower.contains("stores")) {
+            return false;
+        }
+        return !containsNameNoise(lower);
+    }
+
+    private boolean isValidBuyerName(String value) {
+        if (!isValidName(value)) {
+            return false;
+        }
+        String lower = value.toLowerCase();
+        if (lower.contains("description") || lower.contains("invoice details") || lower.contains("nvoice detals")
+                || lower.contains("dispatch") || lower.contains("delivery note") || lower.contains("mode/terms")
+                || lower.contains("reference no") || lower.contains("buyers order") || lower.contains("buyer's order")
+                || lower.contains("purchase order") || lower.contains("bank") || lower.contains("ifsc")
+                || lower.contains("account") || lower.contains("party pincode") || lower.contains("party e-mail")
+                || lower.contains("party mobile")) {
+            return false;
+        }
+        return !containsNameNoise(lower);
+    }
+
     private boolean isValidTotal(String value, LineIndexingService.Zones zones) {
         Double amount = AmountUtil.parseAmount(value);
         return amount != null && isLargestAmountInBottomZone(amount, zones);
@@ -350,6 +471,13 @@ public class InvoiceServiceImpl implements InvoiceService {
             if (candidate.isPercentToken() || AmountUtil.isIgnoredAmountLine(lineText)) {
                 continue;
             }
+            String lower = lineText.toLowerCase();
+            if (AmountUtil.isTaxLine(lineText)
+                    && !(lower.contains("grand total") || lower.contains("invoice value")
+                    || lower.contains("amount payable") || lower.contains("after tax")
+                    || lower.matches("^total\\b.*"))) {
+                continue;
+            }
             if (!AmountUtil.looksLikeCurrencyToken(candidate.getToken()) && lineHasCurrencyToken) {
                 continue;
             }
@@ -362,33 +490,194 @@ public class InvoiceServiceImpl implements InvoiceService {
         return amount != null && max > 0 && Double.compare(amount, max) == 0;
     }
 
-    private boolean shouldRequireReview(InvoiceData data, String rawText, double confidence) {
-        if (confidence < 0.5) {
-            return true;
+    private boolean bottomZoneContainsAmount(Double amount, LineIndexingService.Zones zones) {
+        if (amount == null) {
+            return false;
         }
-        if (!isValidInvoiceNumber(data.getInvoiceNumber())) {
-            return true;
+        for (var candidate : AmountUtil.extractCandidates(zones.bottomZone)) {
+            if (candidate.isPercentToken()) {
+                continue;
+            }
+            if (AmountUtil.approximatelyEquals(candidate.getValue(), amount)) {
+                return true;
+            }
         }
-        if (!isValidName(data.getVendorName()) || !isValidGstin(data.getVendorGstin())) {
-            return true;
+        return false;
+    }
+
+    private List<LineItem> sanitizeLineItems(List<LineItem> items, String subtotalValue, String totalValue) {
+        if (items == null || items.isEmpty()) {
+            return items;
         }
-        if (!isValidTotal(data.getTotalAmount(), LineIndexingService.indexLinesAndZones(rawText))) {
-            return true;
+        Double subtotal = AmountUtil.parseAmount(subtotalValue);
+        Double total = AmountUtil.parseAmount(totalValue);
+        Double ceiling = total != null ? total : subtotal;
+        List<LineItem> cleaned = new java.util.ArrayList<>();
+        for (LineItem item : items) {
+            if (item == null) {
+                continue;
+            }
+            String description = item.getDescription() == null ? "" : item.getDescription().toLowerCase();
+            Double amount = AmountUtil.parseAmount(item.getAmount());
+            if (description.contains("seal nos") || description.contains("remarks") || description.contains("batch no")) {
+                continue;
+            }
+            if (ceiling != null && amount != null && amount > ceiling * 1.25) {
+                continue;
+            }
+            cleaned.add(item);
         }
-        if (!isValidName(data.getBuyerName()) && !isValidGstin(data.getBuyerGstin())) {
-            return true;
+        List<LineItem> deduped = new java.util.ArrayList<>();
+        for (LineItem item : cleaned) {
+            int duplicateIndex = findDuplicateIndex(deduped, item, ceiling);
+            if (duplicateIndex >= 0) {
+                if (scoreLineItem(item) > scoreLineItem(deduped.get(duplicateIndex))) {
+                    deduped.set(duplicateIndex, item);
+                }
+                continue;
+            }
+            deduped.add(item);
         }
-        String lower = rawText == null ? "" : rawText.toLowerCase();
-        if (lower.contains("tax invoice") && (data.getSubTotal() == null || data.getTaxAmount() == null)) {
-            return true;
+        return deduped;
+    }
+
+    private Double sumLineItemAmounts(List<LineItem> items) {
+        if (items == null || items.isEmpty()) {
+            return null;
         }
+        double sum = 0.0;
+        int count = 0;
+        for (LineItem item : items) {
+            Double amount = AmountUtil.parseAmount(item.getAmount());
+            if (amount == null || amount <= 0) {
+                continue;
+            }
+            sum += amount;
+            count++;
+        }
+        return count == 0 ? null : sum;
+    }
+
+    private int findDuplicateIndex(List<LineItem> items, LineItem candidate, Double ceiling) {
+        Double candidateAmount = AmountUtil.parseAmount(candidate.getAmount());
+        if (candidateAmount == null || ceiling == null || candidateAmount < ceiling * 0.75) {
+            return -1;
+        }
+        for (int i = 0; i < items.size(); i++) {
+            Double existingAmount = AmountUtil.parseAmount(items.get(i).getAmount());
+            if (existingAmount != null && AmountUtil.approximatelyEquals(existingAmount, candidateAmount)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private int scoreLineItem(LineItem item) {
+        int score = 0;
+        String description = item.getDescription() == null ? "" : item.getDescription();
+        String lower = description.toLowerCase();
+        if (description.matches(".*[A-Za-z].*")) {
+            score += 30;
+        }
+        if (description.split("\\s+").length >= 3) {
+            score += 20;
+        }
+        if (item.getQuantity() != null) {
+            score += 15;
+        }
+        if (item.getUnitPrice() != null) {
+            score += 15;
+        }
+        if (item.getHsn() != null && item.getHsn().matches("\\d{4,8}")) {
+            score += 10;
+        }
+        if (lower.contains("code") || lower.contains("value (rs")) {
+            score -= 20;
+        }
+        int punctuation = 0;
+        for (char ch : description.toCharArray()) {
+            if (!Character.isLetterOrDigit(ch) && !Character.isWhitespace(ch)) {
+                punctuation++;
+            }
+        }
+        if (punctuation > Math.max(4, description.length() / 5)) {
+            score -= 20;
+        }
+        return score;
+    }
+
+    private void normalizeEntityAssignments(InvoiceData data) {
+        if (sameNormalizedValue(data.getVendorName(), data.getBuyerName())
+                && (sameNormalizedValue(data.getVendorGstin(), data.getBuyerGstin()) || data.getBuyerGstin() == null)) {
+            data.setBuyerName(null);
+        }
+        if (sameNormalizedValue(data.getVendorGstin(), data.getBuyerGstin())
+                && sameNormalizedValue(data.getVendorName(), data.getBuyerName())) {
+            data.setBuyerGstin(null);
+        }
+    }
+
+    private void scrubInvalidIdentityFields(InvoiceData data) {
+        if (!isValidVendorName(data.getVendorName())) {
+            data.setVendorName(null);
+        }
+        if (!isValidBuyerName(data.getBuyerName())) {
+            data.setBuyerName(null);
+        }
+        if (!isValidGstin(data.getVendorGstin())) {
+            data.setVendorGstin(null);
+        }
+        if (!isValidGstin(data.getBuyerGstin())
+                || sameNormalizedValue(data.getVendorGstin(), data.getBuyerGstin())) {
+            data.setBuyerGstin(null);
+        }
+        if (sameNormalizedValue(data.getVendorName(), data.getBuyerName())) {
+            data.setBuyerName(null);
+        }
+    }
+
+    private boolean sameNormalizedValue(String left, String right) {
+        if (left == null || right == null) {
+            return false;
+        }
+        return RegexUtil.normalizeForComparison(left).equals(RegexUtil.normalizeForComparison(right));
+    }
+
+    private String determineStatus(InvoiceData data,
+                                   LineIndexingService.Zones zones,
+                                   String rawText,
+                                   double confidence) {
+        boolean invoiceNumberValid = isValidInvoiceNumber(data.getInvoiceNumber());
+        boolean vendorIdentityValid = isValidVendorName(data.getVendorName()) && isValidGstin(data.getVendorGstin());
+        boolean buyerIdentityPresent = isValidBuyerName(data.getBuyerName()) || isValidGstin(data.getBuyerGstin());
+        boolean totalValid = isValidTotal(data.getTotalAmount(), zones);
+
         Double subtotal = AmountUtil.parseAmount(data.getSubTotal());
         Double tax = AmountUtil.parseAmount(data.getTaxAmount());
         Double total = AmountUtil.parseAmount(data.getTotalAmount());
-        if (subtotal != null && tax != null && total != null && !isAmountConsistent(subtotal, tax, total)) {
-            return true;
+        boolean mathConsistent = isAmountConsistent(subtotal, tax, total);
+        String lower = rawText == null ? "" : rawText.toLowerCase();
+        boolean taxDocument = lower.contains("tax invoice")
+                || lower.contains("igst")
+                || lower.contains("cgst")
+                || lower.contains("sgst");
+        boolean amountValidationCorrect = totalValid
+                && (!taxDocument
+                || mathConsistent
+                || (subtotal == null && tax == null)
+                || (subtotal != null && subtotal < total && tax == null)
+                || (tax != null && tax < total && subtotal == null));
+
+        if (!invoiceNumberValid || !vendorIdentityValid || !totalValid || confidence < 0.60) {
+            return "FAILED";
         }
-        return false;
+        if (confidence >= 0.85 && buyerIdentityPresent && amountValidationCorrect) {
+            return "SUCCESS";
+        }
+        if (confidence >= 0.60) {
+            return "PARTIAL_SUCCESS";
+        }
+        return "FAILED";
     }
 
     private boolean shouldLearnTemplate(Template template,
@@ -396,7 +685,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                                         double confidence,
                                         LineIndexingService.Zones zones,
                                         Map<String, TemplateField> templateFields) {
-        boolean anchorIdentity = isValidName(data.getVendorName()) || isValidGstin(data.getVendorGstin());
+        boolean anchorIdentity = isValidVendorName(data.getVendorName()) || isValidGstin(data.getVendorGstin());
         boolean keyAmountsValid = isValidTotal(data.getTotalAmount(), zones)
                 && (data.getSubTotal() == null || data.getTaxAmount() == null
                 || isAmountConsistent(AmountUtil.parseAmount(data.getSubTotal()), AmountUtil.parseAmount(data.getTaxAmount()), AmountUtil.parseAmount(data.getTotalAmount())));
@@ -422,6 +711,109 @@ public class InvoiceServiceImpl implements InvoiceService {
             return false;
         }
         return AmountUtil.approximatelyEquals(subtotal + tax, total);
+    }
+
+    private void reconcileIdentityFields(InvoiceData data,
+                                         GenericExtraction generic,
+                                         Map<String, String> extractionMethod) {
+        if (generic == null) {
+            return;
+        }
+        String genericVendorName = generic.vendorName == null ? null : generic.vendorName.getValue();
+        String genericBuyerName = generic.buyerName == null ? null : generic.buyerName.getValue();
+        String genericVendorGstin = generic.gstins == null ? null : generic.gstins.getVendorGstin();
+        String genericBuyerGstin = generic.gstins == null ? null : generic.gstins.getBuyerGstin();
+
+        if (shouldPreferVendorName(genericVendorName, data.getVendorName())) {
+            data.setVendorName(genericVendorName);
+            extractionMethod.put("vendor", normalizeMethod(generic.vendorName.getMethod()));
+        }
+        if (shouldPreferBuyerName(genericBuyerName, data.getBuyerName())) {
+            data.setBuyerName(genericBuyerName);
+            extractionMethod.put("buyer", normalizeMethod(generic.buyerName.getMethod()));
+        }
+        if (RegexUtil.isValidGstin(genericVendorGstin)
+                && (!RegexUtil.isValidGstin(data.getVendorGstin())
+                || sameNormalizedValue(data.getVendorGstin(), data.getBuyerGstin()) && !sameNormalizedValue(genericVendorGstin, genericBuyerGstin))) {
+            data.setVendorGstin(genericVendorGstin);
+            extractionMethod.put("gstin", normalizeMethod(generic.gstins.getVendorMethod()));
+        }
+        if (RegexUtil.isValidGstin(genericBuyerGstin)
+                && (!RegexUtil.isValidGstin(data.getBuyerGstin())
+                || sameNormalizedValue(data.getBuyerGstin(), data.getVendorGstin()) && !sameNormalizedValue(genericVendorGstin, genericBuyerGstin))) {
+            data.setBuyerGstin(genericBuyerGstin);
+            extractionMethod.put("buyerGstin", normalizeMethod(generic.gstins.getBuyerMethod()));
+        }
+    }
+
+    private boolean shouldPreferVendorName(String candidate, String current) {
+        if (!isValidVendorName(candidate)) {
+            return false;
+        }
+        if (!isValidVendorName(current)) {
+            return true;
+        }
+        return scoreVendorName(candidate) > scoreVendorName(current) + 10;
+    }
+
+    private boolean shouldPreferBuyerName(String candidate, String current) {
+        if (!isValidBuyerName(candidate)) {
+            return false;
+        }
+        if (!isValidBuyerName(current)) {
+            return true;
+        }
+        return scoreBuyerName(candidate) > scoreBuyerName(current) + 10;
+    }
+
+    private int scoreVendorName(String value) {
+        int score = 0;
+        String lower = value.toLowerCase();
+        if (RegexUtil.containsAnyKeyword(lower, List.of("ltd", "limited", "pvt", "private", "llp", "industries",
+                "corporation", "engineering", "electronics", "hydraulics", "solutions", "chemicals", "systems", "products"))) {
+            score += 45;
+        }
+        if (value.equals(value.toUpperCase()) && value.matches(".*[A-Z].*")) {
+            score += 15;
+        }
+        score += Math.max(0, 30 - value.length() / 3);
+        if (value.contains(",")) {
+            score -= 12;
+        }
+        if (containsNameNoise(lower)) {
+            score -= 50;
+        }
+        return score;
+    }
+
+    private int scoreBuyerName(String value) {
+        int score = 0;
+        String lower = value.toLowerCase();
+        if (RegexUtil.containsAnyKeyword(lower, List.of("m/s", "department", "directorate", "stores", "officer",
+                "manager", "materials", "complex", "atomic", "fuel", "regional", "unit", "plant"))) {
+            score += 35;
+        }
+        if (!value.matches(".*\\d.*")) {
+            score += 10;
+        }
+        score += Math.max(0, 24 - value.length() / 4);
+        if (containsNameNoise(lower)) {
+            score -= 50;
+        }
+        return score;
+    }
+
+    private boolean containsNameNoise(String lower) {
+        return OcrLayoutUtil.isLogisticsLike(lower)
+                || OcrLayoutUtil.isHeaderNoise(lower)
+                || lower.contains("invoice no")
+                || lower.contains("dated")
+                || lower.contains("voucher")
+                || lower.contains("amount")
+                || lower.contains("gstin")
+                || lower.contains("state code")
+                || lower.contains("pin code")
+                || lower.contains("place of supply");
     }
 
     private static class GenericExtraction {
