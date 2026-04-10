@@ -1,53 +1,112 @@
-# Invoice OCR Extraction System
+# 📄 Multi-Document OCR Extraction System
 
-## Overview
+## 🚀 Overview
 
-This project is an intelligent invoice data extraction system that automatically reads invoice images or PDFs and converts them into structured JSON data.
+This project is an intelligent **Multi-Document OCR Extraction System** built using **Java Spring Boot**.
+It automatically extracts structured data from different types of documents such as:
 
-The system uses Tesseract OCR to extract text from invoices and then applies zone-based extraction, regex patterns, keyword detection, and template learning to accurately identify important fields like invoice number, date, GSTIN, vendor details, buyer details, and total amounts.
+* 🧾 Invoices
+* 🪪 Aadhaar Cards
+* 🆔 PAN Cards
+* 🚗 Driving Licenses
 
-The goal of this project is to build a generic invoice extraction system that works across multiple invoice formats instead of being limited to a single template.
+The system uses **OCR + Rule-based Extraction + Template Learning + Factory Design Pattern** to accurately process documents of varying formats.
+
+Unlike traditional systems, this solution is **generic, scalable, and self-improving**.
 
 ---
 
-## Features
+## 🧠 Key Features
 
-* OCR using Tesseract
-* Automatic invoice number extraction
-* Invoice date extraction
-* Vendor and Buyer details extraction
-* GSTIN extraction
+### 🔍 OCR & Preprocessing
+
+* Tesseract OCR integration
+* Image preprocessing (grayscale, thresholding, noise removal)
+* Text cleaning and normalization
+
+### 📊 Invoice Extraction
+
+* Invoice Number & Date extraction
+* Vendor & Buyer details
+* GSTIN extraction (validated)
 * Subtotal, Tax, and Total extraction
-* Line item table extraction
-* Template learning for repeated invoice formats
-* Confidence score for extraction accuracy
-* Rule-based + template-based extraction
-* Low-confidence fallback extraction (AI-ready architecture)
+* Line item detection
+* Template learning for repeated formats
+* Confidence scoring
+
+### 🪪 Aadhaar Extraction
+
+* Name extraction
+* Aadhaar number (masked)
+* Date of Birth
+* Gender detection
+* Address extraction
+* Pincode detection
+
+### 🧩 Multi-Document Support
+
+* Automatic document type detection
+* Supports:
+
+  * Invoice
+  * Aadhaar
+  * PAN Card
+  * Driving License
+* Easily extendable to new document types
+
+### 🏗️ Scalable Architecture
+
+* Factory Design Pattern for extractor selection
+* Modular extractor system
+* Independent logic for each document type
+* Shared OCR infrastructure
+
+### ⚡ API Features
+
 * REST API using Spring Boot
-* JSON output
+* Swagger UI for testing
+* JSON-based output
+* High-performance processing pipeline
 
 ---
 
-## Technology Stack
+## 🏗️ System Architecture
 
-* Java
-* Spring Boot
-* Maven
-* Tesseract OCR
-* Regex & text processing
-* Template Learning (JSON-based storage)
-* REST APIs
-* JUnit Testing
+```text
+Upload Document
+        ↓
+OCR + Preprocessing
+        ↓
+Text Cleaning
+        ↓
+Document Type Detection
+        ↓
+Extractor Factory
+        ↓
+ ├── InvoiceExtractor
+ ├── AadhaarExtractor
+ ├── PanExtractor
+ ├── DrivingLicenseExtractor
+ └── UnknownExtractor
+        ↓
+Validation + Confidence Score
+        ↓
+Structured JSON Output
+```
 
 ---
 
-## Extraction Flow
+## 🔄 Extraction Flow
 
-OCR → Text Cleaning → Zone Detection → Template Extraction → Keyword Extraction → Regex Extraction → Validation → Confidence Score → JSON Output
+```text
+OCR → Text Cleaning → Zone Detection → Template Extraction → 
+Keyword Extraction → Regex Extraction → Validation → 
+Confidence Score → JSON Output
+```
 
 ---
 
-## Sample Output JSON
+## 🧪 Sample Output (Invoice)
 
 ```json
 {
@@ -68,7 +127,22 @@ OCR → Text Cleaning → Zone Detection → Template Extraction → Keyword Ext
 
 ---
 
-## How to Run the Project
+## ⚙️ Technology Stack
+
+* Java
+* Spring Boot
+* Maven
+* Tesseract OCR
+* Apache PDFBox
+* OpenCV (Image Processing)
+* Regex & Text Processing
+* JSON-based Template Learning
+* Swagger (API Testing)
+* JUnit Testing
+
+---
+
+## ▶️ How to Run
 
 ```bash
 mvn clean install
@@ -77,26 +151,77 @@ mvn spring-boot:run
 
 ---
 
-## API Endpoint
+## 🌐 API Endpoints
+
+### 📌 Auto Document Detection (Recommended)
 
 ```
-POST /extract-invoice
+POST /api/document/extract
 ```
 
-Upload invoice image or PDF and the system will return extracted data in JSON format.
+### 🧾 Invoice OCR
+
+```
+POST /api/invoice/extract
+```
+
+### 🪪 Aadhaar OCR
+
+```
+POST /api/aadhaar/extract
+```
+
+Upload a document (PDF/Image) → Get structured JSON output.
 
 ---
 
-## Future Improvements
+## 📊 Confidence Scoring
 
-* AI-based fallback extraction for low-confidence invoices
-* Support for more invoice formats
-* Improved table and line item detection
-* Export extracted data to Excel
-* Web interface for uploading invoices
+The system assigns a confidence score based on extracted fields:
+
+* Invoice Number → 0.15
+* Date → 0.15
+* GSTIN → 0.20
+* Total → 0.20
+* Buyer → 0.10
+* Vendor → 0.10
+* Line Items → 0.10
 
 ---
 
-## Authors
+## 🔮 Future Improvements
 
-* Junaid
+* AI/ML-based fallback extraction
+* Table detection using deep learning
+* Multi-language OCR support
+* Signature & stamp detection
+* Export to Excel / Database
+* Web UI for document upload
+* Parallel OCR processing for large PDFs
+
+---
+
+## 🎯 Project Highlights
+
+* Works across **multiple document formats**
+* **Self-learning template system**
+* **Factory-based modular architecture**
+* **Production-ready REST API**
+* Designed for:
+
+  * Government automation
+  * Invoice processing systems
+  * KYC verification systems
+  * Enterprise document digitization
+
+---
+
+## 👨‍💻 Author
+
+**Junaid Shaik**
+
+---
+
+## ⭐ Version
+
+**v2.0 — Multi-Document OCR System**
