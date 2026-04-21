@@ -30,10 +30,34 @@ public class SubtotalExtractor implements FieldExtractor<String> {
         if (total != null && tax != null) {
             double subtotal = total - tax;
             if (subtotal > 0 && subtotal < total) {
-                return new FieldExtractionResult<>(AmountUtil.formatAmount(subtotal), "fallback", null);
+                if (isCandidatePresent(subtotal, zones)) {
+                    return new FieldExtractionResult<>(AmountUtil.formatAmount(subtotal), "fallback", null);
+                }
+            }
+        }
+        if (total != null) {
+            FieldExtractionResult<String> tableCandidate = extractLargestCandidateBelowTotal(zones.tableZone, total);
+            if (tableCandidate.getValue() != null) {
+                return tableCandidate;
+            }
+            FieldExtractionResult<String> bottomCandidate = extractLargestCandidateBelowTotal(zones.bottomZone, total);
+            if (bottomCandidate.getValue() != null) {
+                return bottomCandidate;
             }
         }
         return new FieldExtractionResult<>(null, "fallback", null);
+    }
+
+    private boolean isCandidatePresent(double amount, LineIndexingService.Zones zones) {
+        java.util.List<LineIndexingService.IndexedLine> candidateLines = new java.util.ArrayList<>();
+        if (zones.tableZone != null) candidateLines.addAll(zones.tableZone);
+        if (zones.bottomZone != null) candidateLines.addAll(zones.bottomZone);
+        for (AmountUtil.AmountCandidate candidate : AmountUtil.extractCandidates(candidateLines)) {
+            if (!candidate.isPercentToken() && AmountUtil.approximatelyEquals(candidate.getValue(), amount)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private FieldExtractionResult<String> extractFromSummaryTable(java.util.List<LineIndexingService.IndexedLine> lines) {
@@ -64,5 +88,31 @@ public class SubtotalExtractor implements FieldExtractor<String> {
             }
         }
         return new FieldExtractionResult<>(null, "fallback", null);
+    }
+
+    private FieldExtractionResult<String> extractLargestCandidateBelowTotal(java.util.List<LineIndexingService.IndexedLine> lines,
+                                                                            double total) {
+        AmountUtil.AmountCandidate best = null;
+        double bestScore = Double.NEGATIVE_INFINITY;
+        for (AmountUtil.AmountCandidate candidate : AmountUtil.extractCandidates(lines)) {
+            if (candidate.isPercentToken() || candidate.getValue() <= 0 || candidate.getValue() >= total) {
+                continue;
+            }
+            String lower = candidate.getLine().getText().toLowerCase();
+            if (lower.contains("bank") || lower.contains("ifsc") || lower.contains("account")) {
+                continue;
+            }
+            double score = candidate.getValue();
+            score += AmountUtil.isPreferredAmountLine(candidate.getLine().getText(), AmountUtil.SUBTOTAL_KEYWORDS) ? 250 : 0;
+            score -= AmountUtil.isPreferredAmountLine(candidate.getLine().getText(), AmountUtil.TAX_KEYWORDS) ? 250 : 0;
+            score -= lower.contains("total") && !AmountUtil.isPreferredAmountLine(candidate.getLine().getText(), AmountUtil.SUBTOTAL_KEYWORDS) ? 80 : 0;
+            if (score > bestScore) {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+        return best == null
+                ? new FieldExtractionResult<>(null, "fallback", null)
+                : new FieldExtractionResult<>(AmountUtil.formatAmount(best.getValue()), "fallback", best.getLine().getLineNumber());
     }
 }

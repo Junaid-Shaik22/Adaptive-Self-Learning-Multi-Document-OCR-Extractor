@@ -155,11 +155,15 @@ public class DocumentProcessingServiceImpl implements DocumentProcessingService 
         byte[] preprocessed = preprocessingService.preprocess(imageBytes);
 
         addOcrPass(ocrPasses, imageBytes, null);
+        addOcrPass(ocrPasses, imageBytes, 4);
         addOcrPass(ocrPasses, imageBytes, 11);
         addOcrPass(ocrPasses, preprocessed, null);
+        addOcrPass(ocrPasses, preprocessed, 4);
+        addOcrPass(ocrPasses, preprocessed, 11);
 
         for (byte[] regionVariant : buildRegionVariants(imageBytes)) {
             addOcrPass(ocrPasses, regionVariant, 6);
+            addOcrPass(ocrPasses, regionVariant, 4);
             addOcrPass(ocrPasses, regionVariant, 11);
         }
 
@@ -187,49 +191,36 @@ public class DocumentProcessingServiceImpl implements DocumentProcessingService 
         int height = source.getHeight();
         double aspectRatio = (double) height / width;
 
-        if (aspectRatio > 2.2d) {
-            variants.add(bufferedImageToPng(source.getSubimage(0, 0, width, Math.max(1, (int) (height * 0.62)))));
-
-            int bottomStart = Math.min(height - 1, (int) (height * 0.55));
-            BufferedImage bottom = source.getSubimage(0, bottomStart, width, height - bottomStart);
-            variants.add(bufferedImageToPng(scaleImage(bottom, 3.0d)));
-
-            int infoStart = Math.min(height - 1, (int) (height * 0.68));
-            int infoHeight = Math.max(1, Math.min(height - infoStart, (int) (height * 0.22)));
-            BufferedImage frontInfo = source.getSubimage(0, infoStart, width, infoHeight);
-            variants.add(bufferedImageToPng(scaleImage(frontInfo, 4.0d)));
-            return variants;
+        if (aspectRatio > 1.35d) {
+            addScaledVariant(variants, crop(source, 0.0d, 0.00d, 1.00d, 0.56d), 2.6d);
+            addScaledVariant(variants, crop(source, 0.0d, 0.42d, 1.00d, 0.58d), 2.8d);
+            addScaledVariant(variants, crop(source, 0.18d, 0.60d, 0.74d, 0.18d), 4.0d);
+            addScaledVariant(variants, crop(source, 0.08d, 0.76d, 0.84d, 0.14d), 4.2d);
         }
 
-        if (aspectRatio < 0.9d) {
-            int upperX = Math.max(0, (int) (width * 0.12));
-            int upperY = Math.max(0, (int) (height * 0.10));
-            int upperWidth = Math.max(1, Math.min(width - upperX, (int) (width * 0.62)));
-            int upperHeight = Math.max(1, Math.min(height - upperY, (int) (height * 0.18)));
-            BufferedImage upperBand = source.getSubimage(upperX, upperY, upperWidth, upperHeight);
-            variants.add(bufferedImageToPng(scaleImage(upperBand, 4.0d)));
-
-            int centerX = Math.max(0, (int) (width * 0.14));
-            int centerY = Math.max(0, (int) (height * 0.17));
-            int centerWidth = Math.max(1, Math.min(width - centerX, (int) (width * 0.60)));
-            int centerHeight = Math.max(1, Math.min(height - centerY, (int) (height * 0.46)));
-            BufferedImage centerBand = source.getSubimage(centerX, centerY, centerWidth, centerHeight);
-            variants.add(bufferedImageToPng(scaleImage(centerBand, 3.5d)));
-
-            int detailsY = Math.max(0, (int) (height * 0.44));
-            int detailsWidth = Math.max(1, Math.min(width, (int) (width * 0.62)));
-            int detailsHeight = Math.max(1, Math.min(height - detailsY, (int) (height * 0.48)));
-            BufferedImage detailsBand = source.getSubimage(0, detailsY, detailsWidth, detailsHeight);
-            variants.add(bufferedImageToPng(scaleImage(detailsBand, 3.5d)));
-
-            int lowerY = Math.max(0, (int) (height * 0.68));
-            int lowerWidth = Math.max(1, Math.min(width, (int) (width * 0.52)));
-            int lowerHeight = Math.max(1, Math.min(height - lowerY, (int) (height * 0.25)));
-            BufferedImage lowerBand = source.getSubimage(0, lowerY, lowerWidth, lowerHeight);
-            variants.add(bufferedImageToPng(scaleImage(lowerBand, 4.0d)));
+        if (aspectRatio < 1.20d) {
+            addScaledVariant(variants, crop(source, 0.00d, 0.00d, 1.00d, 0.24d), 4.0d);
+            addScaledVariant(variants, crop(source, 0.08d, 0.14d, 0.84d, 0.42d), 3.6d);
+            addScaledVariant(variants, crop(source, 0.30d, 0.16d, 0.62d, 0.30d), 4.0d);
+            addScaledVariant(variants, crop(source, 0.05d, 0.60d, 0.90d, 0.28d), 4.0d);
         }
 
         return variants;
+    }
+
+    private void addScaledVariant(List<byte[]> variants, BufferedImage image, double scale) throws Exception {
+        if (image == null || image.getWidth() <= 0 || image.getHeight() <= 0) {
+            return;
+        }
+        variants.add(bufferedImageToPng(scaleImage(image, scale)));
+    }
+
+    private BufferedImage crop(BufferedImage source, double xRatio, double yRatio, double widthRatio, double heightRatio) {
+        int x = Math.max(0, Math.min(source.getWidth() - 1, (int) Math.round(source.getWidth() * xRatio)));
+        int y = Math.max(0, Math.min(source.getHeight() - 1, (int) Math.round(source.getHeight() * yRatio)));
+        int width = Math.max(1, Math.min(source.getWidth() - x, (int) Math.round(source.getWidth() * widthRatio)));
+        int height = Math.max(1, Math.min(source.getHeight() - y, (int) Math.round(source.getHeight() * heightRatio)));
+        return source.getSubimage(x, y, width, height);
     }
 
     private byte[] bufferedImageToPng(BufferedImage image) throws Exception {

@@ -22,18 +22,24 @@
   }
 }, {
   "templateId" : "143a99ea-a706-47ae-9c7f-70b0c4aa4fba",
-  "vendorName" : "Ranco Industries (2022-2023)",
+  "vendorName" : "Ranco Industries",
   "vendorGstin" : "24AAEFR7351M1ZW",
   "signature" : "90f32693e490260b7f27e2c156db1341",
   "layoutSignature" : "4e8f61834f78aee4d621160d835ed8fa",
   "version" : 3,
-  "qualityScore" : 0.9800000000000001,
+  "qualityScore" : 1.0,
   "fieldPositions" : {
     "totalAmount" : {
       "lineNumber" : 28,
       "relativePosition" : 2,
       "zone" : "BOTTOM",
-      "keyword" : "total"
+      "keyword" : null
+    },
+    "buyerGstin" : {
+      "lineNumber" : 16,
+      "relativePosition" : 6,
+      "zone" : "MIDDLE",
+      "keyword" : "gstin"
     },
     "taxLine" : {
       "lineNumber" : 31,
@@ -42,8 +48,8 @@
       "keyword" : "igst"
     },
     "invoiceNumber" : {
-      "lineNumber" : 2,
-      "relativePosition" : 1,
+      "lineNumber" : 3,
+      "relativePosition" : 2,
       "zone" : "TOP",
       "keyword" : "invoice no"
     },
@@ -57,7 +63,7 @@
       "lineNumber" : 28,
       "relativePosition" : 2,
       "zone" : "BOTTOM",
-      "keyword" : "total"
+      "keyword" : null
     },
     "invoiceDate" : {
       "lineNumber" : 3,
@@ -384,18 +390,18 @@
   }
 }, {
   "templateId" : "281af008-fa25-4503-8a9c-0e42f2e7a4d1",
-  "vendorName" : "SUVARNA TECHNOSOFT PVT LTD.,",
+  "vendorName" : "SUVARNA TECHNOSOFT PVT LTD.",
   "vendorGstin" : "36AAHCS8698E1ZQ",
-  "signature" : "0436cb244cf4cc3e0cdbae5dc4af9fda",
-  "layoutSignature" : "9ae85cf1e29ac7c7233bd74797a81d6f",
+  "signature" : "f41b28c55aa87c7bd838c3b6e14f5636",
+  "layoutSignature" : "6d8da0525e3b95de9fa2d802d1dde847",
   "version" : 3,
-  "qualityScore" : 0.86,
+  "qualityScore" : 0.8300000000000002,
   "fieldPositions" : {
     "totalAmount" : {
       "lineNumber" : 45,
-      "relativePosition" : 15,
+      "relativePosition" : 13,
       "zone" : "BOTTOM",
-      "keyword" : "total"
+      "keyword" : null
     },
     "buyerGstin" : {
       "lineNumber" : 18,
@@ -405,15 +411,21 @@
     },
     "taxLine" : {
       "lineNumber" : 34,
-      "relativePosition" : 4,
+      "relativePosition" : 2,
       "zone" : "BOTTOM",
       "keyword" : null
     },
-    "invoiceNumber" : {
-      "lineNumber" : 14,
-      "relativePosition" : 13,
-      "zone" : "TOP",
-      "keyword" : "invoice no"
+    "subTotal" : {
+      "lineNumber" : 30,
+      "relativePosition" : -1,
+      "zone" : "BOTTOM",
+      "keyword" : null
+    },
+    "totalLine" : {
+      "lineNumber" : 34,
+      "relativePosition" : 2,
+      "zone" : "BOTTOM",
+      "keyword" : null
     },
     "vendorName" : {
       "lineNumber" : 2,
@@ -422,8 +434,8 @@
       "keyword" : "ltd"
     },
     "buyerName" : {
-      "lineNumber" : 12,
-      "relativePosition" : 2,
+      "lineNumber" : 15,
+      "relativePosition" : 5,
       "zone" : "MIDDLE",
       "keyword" : null
     },
@@ -587,7 +599,7 @@
       "lineNumber" : 29,
       "relativePosition" : 2,
       "zone" : "BOTTOM",
-      "keyword" : "total"
+      "keyword" : "invoice value"
     },
     "buyerGstin" : {
       "lineNumber" : 23,
@@ -607,11 +619,17 @@
       "zone" : "TOP",
       "keyword" : "invoice no"
     },
+    "subTotal" : {
+      "lineNumber" : 27,
+      "relativePosition" : 0,
+      "zone" : "BOTTOM",
+      "keyword" : null
+    },
     "totalLine" : {
       "lineNumber" : 29,
       "relativePosition" : 2,
       "zone" : "BOTTOM",
-      "keyword" : "total"
+      "keyword" : "invoice value"
     },
     "invoiceDate" : {
       "lineNumber" : 12,
@@ -648,6 +666,46 @@
       "relativePosition" : -1,
       "zone" : "TABLE",
       "keyword" : null
+    }
+  }
+}, {
+  "templateId" : "624298e0-3367-459e-bedb-e55702f0e163",
+  "vendorName" : null,
+  "vendorGstin" : "08AAAGN1030Q1Z8",
+  "signature" : "26c8a600cc0b0da4cfd87c3bb7098ffe",
+  "layoutSignature" : "94f2cb63cc4dcbbb6cd2d3c92ef74dcb",
+  "version" : 3,
+  "qualityScore" : 0.6100000000000001,
+  "fieldPositions" : {
+    "totalAmount" : {
+      "lineNumber" : 33,
+      "relativePosition" : 5,
+      "zone" : "BOTTOM",
+      "keyword" : null
+    },
+    "vendorName" : {
+      "lineNumber" : 2,
+      "relativePosition" : 1,
+      "zone" : "TOP",
+      "keyword" : null
+    },
+    "buyerName" : {
+      "lineNumber" : 9,
+      "relativePosition" : 1,
+      "zone" : "MIDDLE",
+      "keyword" : null
+    },
+    "vendorGstin" : {
+      "lineNumber" : 12,
+      "relativePosition" : 11,
+      "zone" : "TOP",
+      "keyword" : null
+    },
+    "tableHeader" : {
+      "lineNumber" : 14,
+      "relativePosition" : -1,
+      "zone" : "TABLE",
+      "keyword" : "description"
     }
   }
 } ]

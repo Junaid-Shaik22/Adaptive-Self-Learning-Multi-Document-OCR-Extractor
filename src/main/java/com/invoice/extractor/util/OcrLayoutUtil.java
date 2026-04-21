@@ -40,8 +40,9 @@ public final class OcrLayoutUtil {
     );
 
     public static final List<String> BUYER_SECTION_KEYWORDS = List.of(
-            "buyer", "bill to", "billed to", "consignee", "ship to", "details of recipient",
-            "details of consignee", "details of receiver", "details of recipient (billed to)",
+            "buyer", "bill to", "billed to", "consignee", "ship to", "shipped to", "details of recipient",
+            "details of consignee", "details of receiver", "details of buyer", "details of purchaser",
+            "details of recipient (billed to)",
             "details of consignee (shipped to)", "details of receiver (billed to)"
     );
 

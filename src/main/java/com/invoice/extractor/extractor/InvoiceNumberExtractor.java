@@ -19,7 +19,7 @@ public class InvoiceNumberExtractor implements FieldExtractor<String> {
             "recipient", "supplier", "copy", "consignee", "ship to", "bill to", "party gst");
 
     private static final Pattern KEYWORD_PATTERN = Pattern.compile(
-            "(?i)(invoice\\s*(?:no|number|#)|inv\\s*no|bill\\s*(?:no|#))\\s*[:#-]*\\s*([A-Za-z0-9/-]{3,20})");
+            "(?i)(invoice\\s*(?:no|number|#)|inv\\s*no|bill\\s*(?:no|#))\\s*[:#-]*\\s*([A-Za-z0-9/-]{1,20})");
 
     @Override
     public String extract(String[] lines, int[] zones) {
@@ -31,6 +31,11 @@ public class InvoiceNumberExtractor implements FieldExtractor<String> {
     }
 
     public FieldExtractionResult<String> extractResult(LineIndexingService.Zones zones) {
+        FieldExtractionResult<String> anchored = extractAnchoredToken(zones.topZone);
+        if (anchored.getValue() != null) {
+            return anchored;
+        }
+
         Map<String, Integer> freq = new HashMap<>();
         List<LineIndexingService.IndexedLine> candidateLines = keywordWindow(zones.topZone);
         for (LineIndexingService.IndexedLine line : candidateLines) {
@@ -57,6 +62,55 @@ public class InvoiceNumberExtractor implements FieldExtractor<String> {
             return new FieldExtractionResult<>(repeated, "regex", findLine(zones.topZone, repeated));
         }
         return new FieldExtractionResult<>(null, "fallback", null);
+    }
+
+    private FieldExtractionResult<String> extractAnchoredToken(List<LineIndexingService.IndexedLine> lines) {
+        String bestValue = null;
+        Integer bestLine = null;
+        int bestScore = Integer.MIN_VALUE;
+        for (int i = 0; i < lines.size(); i++) {
+            LineIndexingService.IndexedLine line = lines.get(i);
+            String lower = line.getText().toLowerCase(Locale.ROOT);
+            if (!containsStrictInvoiceAnchor(lower)) {
+                continue;
+            }
+            String stripped = line.getText()
+                    .replaceFirst("(?i)^.*?(?:invoice\\s*(?:no|number|#)|inv\\s*no|bill\\s*(?:no|#))\\.?\\s*(?:[:#>|-]+\\s*)*", "")
+                    .trim();
+            for (int offset = 0; offset <= 2; offset++) {
+                int current = i + offset;
+                if (current >= lines.size()) {
+                    break;
+                }
+                for (String fragment : OcrLayoutUtil.fragments(offset == 0 ? stripped : lines.get(current).getText())) {
+                    for (String token : tokenize(fragment)) {
+                        String candidate = RegexUtil.repairInvoiceNumberCandidate(token);
+                        if (!validate(candidate, true)) {
+                            continue;
+                        }
+                        int score = 180 - (offset * 20);
+                        score += scoreCandidate(candidate, fragment, Map.of(), true);
+                        score += fragment.length() <= 20 ? 15 : 0;
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestValue = candidate;
+                            bestLine = lines.get(current).getLineNumber();
+                        }
+                    }
+                }
+            }
+        }
+        return new FieldExtractionResult<>(bestValue, bestValue == null ? "fallback" : "priority", bestLine);
+    }
+
+    private boolean containsStrictInvoiceAnchor(String text) {
+        String lower = text == null ? "" : text.toLowerCase(Locale.ROOT);
+        return lower.contains("invoice no")
+                || lower.contains("invoice number")
+                || lower.contains("invoice #")
+                || lower.contains("inv no")
+                || lower.contains("bill no")
+                || lower.contains("bill #");
     }
 
     private List<LineIndexingService.IndexedLine> keywordWindow(List<LineIndexingService.IndexedLine> lines) {
@@ -99,7 +153,7 @@ public class InvoiceNumberExtractor implements FieldExtractor<String> {
                 if (matcher.find()) {
                     String candidate = RegexUtil.repairInvoiceNumberCandidate(matcher.group(2));
                     if (validate(candidate, true)) {
-                        if (candidate.contains("/") || candidate.contains("-") || candidate.length() >= 5) {
+                        if (candidate.contains("/") || candidate.contains("-") || candidate.length() >= 3) {
                             return new FieldExtractionResult<>(candidate, "keyword", line.getLineNumber());
                         }
                         int score = scoreCandidate(candidate, candidateLine, freq, true);
@@ -147,6 +201,7 @@ public class InvoiceNumberExtractor implements FieldExtractor<String> {
         return List.of(text.split("[\\s:]+"));
     }
 
+
     private String chooseMostRepeated(Map<String, Integer> freq) {
         String best = null;
         int bestCount = 1;
@@ -185,7 +240,7 @@ public class InvoiceNumberExtractor implements FieldExtractor<String> {
         if (isKeywordLookalike(normalized)) {
             return false;
         }
-        if (normalized.matches("^\\d{3,12}$")) {
+        if (normalized.matches("^\\d{1,12}$")) {
             return keywordAnchored;
         }
         if (!keywordAnchored && !isStructuredUnanchored(normalized)) {
@@ -206,8 +261,11 @@ public class InvoiceNumberExtractor implements FieldExtractor<String> {
         if (candidate.toUpperCase(Locale.ROOT).startsWith("NO-")) {
             score -= 30;
         }
-        if (candidate.matches("^\\d{3,12}$")) {
+        if (candidate.matches("^\\d{1,12}$")) {
             score += regexMatch ? 10 : 25;
+        }
+        if (candidate.matches("^\\d{1,12}$") && containsInvoiceKeyword(source.toLowerCase(Locale.ROOT))) {
+            score += 100;
         }
         if (candidate.matches("^[A-Z]{2,10}\\d{2,8}/\\d{1,8}[A-Z]?$")) {
             score += 25;
@@ -285,6 +343,6 @@ public class InvoiceNumberExtractor implements FieldExtractor<String> {
         if (normalized.matches("^[A-Z]{1,4}\\d{2,10}[A-Z]?$")) {
             return true;
         }
-        return normalized.matches("^\\d{3,12}$");
+        return normalized.matches("^\\d{1,12}$");
     }
 }

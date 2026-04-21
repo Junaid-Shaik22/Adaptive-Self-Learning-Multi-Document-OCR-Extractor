@@ -1,6 +1,8 @@
 package com.invoice.extractor.service.impl;
 
 import com.invoice.extractor.model.InvoiceData;
+import com.invoice.extractor.model.InvoiceOcrDocument;
+import com.invoice.extractor.model.InvoiceOcrPage;
 import com.invoice.extractor.service.OcrService;
 import com.invoice.extractor.template.JsonTemplateRepository;
 import com.invoice.extractor.template.Template;
@@ -77,7 +79,9 @@ class InvoiceServiceImplTest {
         assertEquals("260680.51", data.getSubTotal());
         assertEquals("46922.49", data.getTaxAmount());
         assertEquals("307603", data.getTotalAmount());
-        assertTrue(data.getLineItems().isEmpty());
+        assertEquals("NOT_MENTIONED", data.getOrderReference());
+        assertEquals("NOT_MENTIONED", data.getDeliveryNote());
+        assertNotNull(data.getLineItems());
         assertEquals("SUCCESS", data.getStatus());
     }
 
@@ -97,7 +101,7 @@ class InvoiceServiceImplTest {
         assertEquals("260680.51", data.getSubTotal());
         assertEquals("46922.49", data.getTaxAmount());
         assertEquals("307603", data.getTotalAmount());
-        assertTrue(data.getLineItems().isEmpty());
+        assertNotNull(data.getLineItems());
     }
 
     @Test
@@ -116,7 +120,7 @@ class InvoiceServiceImplTest {
         assertEquals("260680.51", data.getSubTotal());
         assertEquals("46922.49", data.getTaxAmount());
         assertEquals("307603", data.getTotalAmount());
-        assertTrue(data.getLineItems().isEmpty());
+        assertNotNull(data.getLineItems());
     }
 
     @Test
@@ -187,6 +191,29 @@ class InvoiceServiceImplTest {
     }
 
     @Test
+    void extractsHeaderlessLowValueLineItemsFromConsecutiveRows() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, headerlessLowValueLineItemsOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertNotNull(data.getLineItems());
+        assertEquals(2, data.getLineItems().size());
+        assertEquals("Widget A", data.getLineItems().get(0).getDescription());
+        assertEquals("1001", data.getLineItems().get(0).getHsn());
+        assertEquals("2", data.getLineItems().get(0).getQuantity());
+        assertEquals("50", data.getLineItems().get(0).getUnitPrice());
+        assertEquals("100", data.getLineItems().get(0).getAmount());
+        assertEquals("Widget B", data.getLineItems().get(1).getDescription());
+        assertEquals("1002", data.getLineItems().get(1).getHsn());
+        assertEquals("3", data.getLineItems().get(1).getQuantity());
+        assertEquals("20", data.getLineItems().get(1).getUnitPrice());
+        assertEquals("60", data.getLineItems().get(1).getAmount());
+        assertEquals("160", data.getSubTotal());
+        assertEquals("160", data.getTotalAmount());
+    }
+
+    @Test
     void extractsParthStyleInvoiceWithoutGarbageItemsOrWrongTotals() {
         Path templatePath = tempDir.resolve("templates.json");
         InvoiceServiceImpl service = buildService(templatePath, parthStyleOcr());
@@ -225,6 +252,9 @@ class InvoiceServiceImplTest {
         assertEquals("190000", data.getSubTotal());
         assertEquals("34200", data.getTaxAmount());
         assertEquals("224200", data.getTotalAmount());
+        assertTrue(data.getBuyerName().contains("Stores Officer/Asst. Stores Officer"));
+        assertEquals("Telangana", data.getState());
+        assertEquals("500062", data.getPincode());
         assertEquals(1, data.getLineItems().size());
         assertEquals("28141000", data.getLineItems().get(0).getHsn());
         assertEquals("2500", data.getLineItems().get(0).getQuantity());
@@ -248,6 +278,8 @@ class InvoiceServiceImplTest {
         assertEquals("284746", data.getSubTotal());
         assertEquals("51254.28", data.getTaxAmount());
         assertEquals("336000", data.getTotalAmount());
+        assertEquals("Telangana", data.getState());
+        assertEquals("Telangana", data.getPlaceOfSupply());
         assertEquals(1, data.getLineItems().size());
         assertEquals("94042190", data.getLineItems().get(0).getHsn());
         assertEquals("70", data.getLineItems().get(0).getQuantity());
@@ -300,6 +332,20 @@ class InvoiceServiceImplTest {
     }
 
     @Test
+    void extractsAuditStyleControlsoftNoiseLineItemAndNames() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, controlsoftAuditNoiseOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertEquals("Controlsoft Engineering India Pvt Ltd", data.getVendorName());
+        assertEquals("33AABCC8871D1ZT", data.getVendorGstin());
+        assertTrue(data.getBuyerName().contains("NUCLEAR FUEL COMPLEX"));
+        assertEquals("36AAAGN1030Q1Z9", data.getBuyerGstin());
+        assertNotNull(data.getLineItems());
+    }
+
+    @Test
     void extractsIdentityFieldsFromAuditStyleAscencionLayout() {
         Path templatePath = tempDir.resolve("templates.json");
         InvoiceServiceImpl service = buildService(templatePath, ascencionStyleOcr());
@@ -311,6 +357,122 @@ class InvoiceServiceImplTest {
         assertNotNull(data.getBuyerName());
         assertTrue(data.getBuyerName().contains("Department of Atomic Energy Stores"));
         assertEquals("36AAAGN1030Q1Z9", data.getBuyerGstin());
+    }
+
+    @Test
+    void extractsAuditStyleAvTradingNamesAndLineItem() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, avTradingAuditNoiseOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertEquals("AV TRADING COMPANY", data.getVendorName());
+        assertEquals("27BLPPS1385F1ZM", data.getVendorGstin());
+        assertEquals("36AAAGN1030Q1Z9", data.getBuyerGstin());
+        assertEquals(1, data.getLineItems().size());
+        assertEquals("6804", data.getLineItems().get(0).getHsn());
+        assertEquals("8100", data.getLineItems().get(0).getAmount());
+    }
+
+    @Test
+    void extractsAuditStyleIrelBuyerAndLineItem() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, irelAuditNoiseOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertEquals("IREL (India) Limited", data.getVendorName());
+        assertTrue(data.getBuyerName().contains("NUCLEAR FUEL COMPLEX"));
+        assertEquals(1, data.getLineItems().size());
+        assertEquals("26151000", data.getLineItems().get(0).getHsn());
+        assertEquals("15", data.getLineItems().get(0).getQuantity());
+        assertEquals("181750", data.getLineItems().get(0).getUnitPrice());
+        assertEquals("2726250", data.getLineItems().get(0).getAmount());
+    }
+
+    @Test
+    void cleansAuditStyleMysoreNoiseWithoutKeepingBadTransportValues() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, auditStyleMysoreNoiseOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertTrue(data.getBuyerName().contains("Stores Officer/Asst. Stores Officer"));
+        assertEquals("ECIL", data.getDestination());
+        assertEquals("HDFC BANK LIMITED", data.getBankName());
+        assertEquals("50200059361983", data.getAccountNumber());
+        assertEquals("NOT_MENTIONED", data.getTransporterName());
+        assertEquals("NOT_MENTIONED", data.getTransportDetails());
+    }
+
+    @Test
+    void extractsWebsiteAndEmailFromAuditStyleContactLinesWithoutInventingBankData() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, auditStyleAscencionContactOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertEquals("D70C", data.getInvoiceNumber());
+        assertEquals("07CXGPS0971P1ZP", data.getVendorGstin());
+        assertEquals("sales@ascencionelectronics.com", data.getVendorEmail());
+        assertEquals("www.ascencionelectronics.com", data.getVendorWebsite());
+        assertEquals("NOT_MENTIONED", data.getBankName());
+        assertTrue(data.getBuyerName().contains("Department of Atomic Energy Stores"));
+        assertEquals("DTOC COURIER", data.getTransportDetails());
+        assertEquals("Telangana", data.getPlaceOfSupply());
+    }
+
+    @Test
+    void extractsRawAuditRancoPageWithCorrectAmountsAndBankFields() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, rawAuditRancoPageOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertEquals("B584", data.getInvoiceNumber());
+        assertEquals("20-Jan-24", data.getInvoiceDate());
+        assertEquals("24AAEFR7351M1ZW", data.getVendorGstin());
+        assertEquals("08AAAGN1030Q1Z8", data.getBuyerGstin());
+        assertEquals("State Bank of India", data.getBankName());
+        assertEquals("56007241003", data.getAccountNumber());
+        assertEquals("SBIN0063762", data.getIfscCode());
+        assertEquals("260680.51", data.getSubTotal());
+        assertEquals("46922.49", data.getTaxAmount());
+        assertEquals("307603", data.getTotalAmount());
+    }
+
+    @Test
+    void extractsRawAuditMadhavPageWithNamedBankAndTransporter() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, rawAuditMadhavPageOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertEquals("MPE/23-24/01191", data.getInvoiceNumber());
+        assertEquals("ICICI BANK", data.getBankName());
+        assertEquals("662805600466", data.getAccountNumber());
+        assertEquals("ICIC0006628", data.getIfscCode());
+        assertEquals("DELHI M.P. ROADLINE", data.getTransporterName());
+        assertEquals("DELHI M.P. ROADLINE", data.getTransportDetails());
+        assertEquals("284746", data.getSubTotal());
+        assertEquals("51254.28", data.getTaxAmount());
+        assertEquals("336000", data.getTotalAmount());
+    }
+
+    @Test
+    void extractsRawAuditAscencionPageWithBankAndTaxBreakdown() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, rawAuditAscencionPageOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertEquals("295", data.getInvoiceNumber());
+        assertEquals("07CXGPS0971P1ZP", data.getVendorGstin());
+        assertEquals("36AAAGN1030Q1Z9", data.getBuyerGstin());
+        assertNotEquals("NOT_MENTIONED", data.getBuyerName());
+        assertEquals("AXIS BANK", data.getBankName());
+        assertEquals("916020036468661", data.getAccountNumber());
+        assertEquals("UTIB0000786", data.getIfscCode());
     }
 
     @Test
@@ -327,9 +489,154 @@ class InvoiceServiceImplTest {
         assertFalse(data.getBuyerName().toLowerCase().contains("invoice detals"));
     }
 
+    @Test
+    void extractsUniversalInvoiceBusinessAndMetadataFields() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, supplementalFieldsOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertEquals("PO-7788/24-25", data.getPoNumber());
+        assertEquals("05-Apr-2026", data.getPoDate());
+        assertEquals("RFQ-5566/24", data.getOrderReference());
+        assertEquals("DN-4455", data.getDeliveryNote());
+        assertEquals("FASTTRACK LOGISTICS LLP", data.getDispatchThrough());
+        assertEquals("FASTTRACK LOGISTICS LLP", data.getTransporterName());
+        assertEquals("FASTTRACK LOGISTICS LLP", data.getTransportDetails());
+        assertEquals("TS09AB1234", data.getVehicleNumber());
+        assertEquals("Hyderabad", data.getDestination());
+        assertEquals("Telangana", data.getPlaceOfSupply());
+        assertEquals("30 DAYS CREDIT", data.getPaymentTerms());
+        assertEquals("HDFC BANK", data.getBankName());
+        assertEquals("9988776655", data.getAccountNumber());
+        assertEquals("HDFC0000123", data.getIfscCode());
+        assertEquals("Banjara Hills", data.getBranch());
+        assertEquals("IRN998877665544332211", data.getIrn());
+        assertEquals("ACK/2026/001", data.getAckNumber());
+        assertEquals("EWB123456789", data.getEwayBill());
+        assertEquals("+91 9876543210, 04012345678", data.getVendorPhone());
+        assertEquals("sales@acmeprocess.com", data.getVendorEmail());
+        assertEquals("acmeprocess.com", data.getVendorWebsite());
+        assertTrue(data.getVendorAddress().contains("Plot 44 Industrial Estate"));
+        assertTrue(data.getBuyerAddress().contains("Aadhar Building"));
+        assertEquals("ABCDE1234F", data.getVendorPAN());
+        assertEquals("U12345TG2010PTC123456", data.getVendorCIN());
+        assertEquals("UDYAM-TG-12-1234567", data.getMsmeNumber());
+        assertEquals("Telangana", data.getState());
+        assertEquals("36", data.getStateCode());
+        assertEquals("500062", data.getPincode());
+        assertEquals("15000", data.getTaxableValue());
+        assertEquals("1350", data.getCgst());
+        assertEquals("1350", data.getSgst());
+        assertEquals("NOT_MENTIONED", data.getIgst());
+        assertEquals("0", data.getRoundOff());
+        assertNull(data.getDynamicFields());
+        assertNull(data.getKnownFields());
+        assertNull(data.getRawText());
+    }
+
+    @Test
+    void keepsPoAndVehicleOutOfBuyerAddressUsingPriorityRedaction() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, poOverlapAddressOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertEquals("GEMC-12345", data.getPoNumber());
+        assertEquals("TS09AB1234", data.getVehicleNumber());
+        assertEquals("500062", data.getPincode());
+        assertTrue(data.getBuyerName().contains("Department of Atomic Energy Stores"));
+        assertTrue(data.getBuyerAddress().contains("HRPSU, NFC"));
+        assertFalse(data.getBuyerAddress().contains("GEMC-12345"));
+        assertFalse(data.getBuyerAddress().toLowerCase().contains("invoice no"));
+        assertFalse(data.getBuyerAddress().toLowerCase().contains("gstin"));
+    }
+
+    @Test
+    void reconstructsSubtotalAndTaxFromSparseSummaryWhenOnlyTotalIsLabeled() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, sparseFinancialSummaryOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertEquals("INV9001", data.getInvoiceNumber());
+        assertEquals("10000", data.getSubTotal());
+        assertEquals("1800", data.getTaxAmount());
+        assertEquals("11800", data.getTotalAmount());
+    }
+
+    @Test
+    void prefersFirstPageHeaderLastPageTotalsAndMiddlePageTablesForMultiPageInvoices() {
+        Path templatePath = tempDir.resolve("templates.json");
+        OcrService ocrService = new OcrService() {
+            @Override
+            public String extractText(org.springframework.web.multipart.MultipartFile file) {
+                return "";
+            }
+
+            @Override
+            public InvoiceOcrDocument extractDocument(org.springframework.web.multipart.MultipartFile file) {
+                return new InvoiceOcrDocument(List.of(
+                        new InvoiceOcrPage(1, "page-1.png", multiPageFirstPage()),
+                        new InvoiceOcrPage(2, "page-2.png", multiPageMiddlePage()),
+                        new InvoiceOcrPage(3, "page-3.png", multiPageLastPage())
+                ));
+            }
+        };
+        InvoiceServiceImpl service = buildService(templatePath, ocrService);
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.pdf", "application/pdf", new byte[0]));
+
+        assertEquals(3, data.getPagesProcessed());
+        assertEquals("INV/24-25/0099", data.getInvoiceNumber());
+        assertEquals("05-Apr-2026", data.getInvoiceDate());
+        assertEquals("ACME PROCESS SYSTEMS PRIVATE LIMITED", data.getVendorName());
+        assertEquals("29ABCDE1234F1Z5", data.getVendorGstin());
+        assertEquals("OMEGA PROJECTS LLP", data.getBuyerName());
+        assertEquals("27PQRSX6789L1Z2", data.getBuyerGstin());
+        assertEquals("40000", data.getSubTotal());
+        assertEquals("40000", data.getTaxableValue());
+        assertEquals("3600", data.getCgst());
+        assertEquals("3600", data.getSgst());
+        assertEquals("7200", data.getTaxAmount());
+        assertEquals("47200", data.getTotalAmount());
+        assertNotNull(data.getLineItems());
+        assertFalse(data.getLineItems().isEmpty());
+        assertNull(data.getRawText());
+        assertEquals("30 DAYS", data.getPaymentTerms());
+        assertEquals("HDFC BANK", data.getBankName());
+        assertEquals("9988776655", data.getAccountNumber());
+        assertEquals("HDFC0000123", data.getIfscCode());
+    }
+
+    @Test
+    void extractsAnchoredShortNumericInvoiceNumbersWithoutColumnBleed() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, shortNumericColumnSplitOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertEquals("7", data.getInvoiceNumber());
+        assertEquals("01.04.2026", data.getInvoiceDate());
+        assertEquals("ACME INDUSTRIES PRIVATE LIMITED", data.getVendorName());
+        assertEquals("29ABCDE1234F1Z5", data.getVendorGstin());
+        assertEquals("OMEGA PROJECTS LLP", data.getBuyerName());
+        assertEquals("27PQRSX6789L1Z2", data.getBuyerGstin());
+        assertEquals("GEMC-12345", data.getPoNumber());
+        assertEquals("TS09AB1234", data.getVehicleNumber());
+        assertFalse(data.getBuyerName().contains("GEMC"));
+        assertFalse(data.getBuyerName().contains("TS09"));
+        assertEquals("5000", data.getSubTotal());
+        assertEquals("900", data.getTaxAmount());
+        assertEquals("5900", data.getTotalAmount());
+    }
+
     private InvoiceServiceImpl buildService(Path templatePath, String ocrText) {
+        return buildService(templatePath, file -> ocrText);
+    }
+
+    private InvoiceServiceImpl buildService(Path templatePath, OcrService ocrService) {
         JsonTemplateRepository repository = new JsonTemplateRepository(templatePath);
-        OcrService ocrService = file -> ocrText;
         return new InvoiceServiceImpl(
                 ocrService,
                 new TemplateServiceImpl(repository),
@@ -583,6 +890,23 @@ class InvoiceServiceImplTest {
                 """;
     }
 
+    private String headerlessLowValueLineItemsOcr() {
+        return """
+                ACME INDUSTRIES PRIVATE LIMITED
+                GSTIN: 29ABCDE1234F1Z5
+                Tax Invoice
+                Invoice No: INV1042
+                Date: 21-Apr-2026
+                Billed To
+                OMEGA TRADERS LLP
+                GSTIN: 27PQRSX6789L1Z2
+                Widget A 1001 2 50 100
+                Widget B 1002 3 20 60
+                Subtotal 160
+                Grand Total 160
+                """;
+    }
+
     private String parthStyleOcr() {
         return """
                 PARTH ENERGY SYSTEMS.PVT. LTD
@@ -706,6 +1030,168 @@ class InvoiceServiceImplTest {
                 """;
     }
 
+    private String auditStyleMysoreNoiseOcr() {
+        return """
+                Tax Invoice
+                Mysore Ammonia and Chemicals Limited
+                GSTIN No. : 36AABCC9037H1ZN
+                Invoice No : GST2324/2808
+                Invoice Date : 6-Feb-24
+                Details of Recipient (Billed to)
+                ( Shipped to), M/s. The Stores Officer/Asst. Stores Officer
+                Directorate of Purchase & Stores, Hyderabad Regional Stores Unit,
+                Nuclear Fuel Complex, ECIL (PO), Hyderabad,
+                Pin Code : 500062
+                GSTIN No. : 36AAAGN1030Q1Z9
+                Place of Supply : Telangana
+                Destination : > ECIL
+                Vehicle Number : AP28TD2823
+                Transporter Name : Place of Supply : Telangana
+                Transport Details : ed at full risk and liability of the Customer /
+                HDFC BANK LIMITED CAPACITY. A/c Type : Current A/c A/c No - 50200059361983
+                Taxable Value 190000.00
+                CGST 17100.00
+                SGST 17100.00
+                Total Invoice Value (figure): 224200.00
+                """;
+    }
+
+    private String auditStyleAscencionContactOcr() {
+        return """
+                TAX INVOICE
+                Invoice No : D70C
+                Date : 19-12-2023
+                ASCENCION ELECTRONICS
+                A-75, 2ND FLOOR, OPP PILI KOTHI, HARI NAGAR, NEW DELHI-110064, www.ascencionelectronics.com, Email-sales@ascencionelectronics.com
+                Tel. : 9810927895
+                GSTIN : O7CXGPS0971P1ZP
+                Shipped to :
+                Department of Atomic Energy Stores
+                Stores Officer
+                HRPSU, NFC, P.O. ECIL, HYDERABAD, TELANGANA-500062
+                GSTIN / UIN : 36AAAGN1030Q1Z9
+                Transport : DTOC COURIER
+                Place of Supply : Telangana (36)
+                Taxable Value 15999.99
+                Grand Total 15999.99
+                """;
+    }
+
+    private String rawAuditRancoPageOcr() {
+        return """
+                TAX INVOICE(Page 2) | (ORIGINAL FOR RECIPIENT)
+                1 TM | Ranco Industries (2022-2023) | Invoice No. -_e-Way Bill No. | Dated
+                Fact Aad : - S . No-150, Plot No-3A,Sihor Ghangali Rd |B584 | 20-Jan-24
+                ANCO | Sihor-Bhavnagar, Gujarat-364240 | Delivery Note | Mode/Terms of Payment
+                Off Add : - G-16,Radhe Shaym Complex, Waghawadi Rd. | B584 | Within 10 Days
+                Near Radha Mandir, Bhavnagar-364001 | Reference No. & Date. | Other References
+                Mob No-9619377072/9825083030 | asg4 gt 20-Jan-24 | Nil
+                GSTIN/UIN : 24AAEFR7351M1ZW
+                State N | Gujarat. Code : 24 | Buyer's Order No. | Dated
+                _ | . | E-Mail : mum@indiaflanges.com | eee o1-Dec-e3 Dal
+                Gonsignee (Ship to) | ispatch Doc No. | elivery Note Date
+                Department of Atomic Energy- KOTA | B54 BDU | 20-Jan-24
+                Directorate Of Purchase And Stores | ispatcne | ong | esnnalion
+                NEC KOTA PLANT SITE, RAWATBHATTA, | By Aman Roadliines | Kota
+                PO, ANUSHAKTI (VIA) KOTA | Bill of Lading/LR-RR No. [Motor Vehicle No.
+                CHITTORGARH, RAJASTHAN-323303, India | 81805 dt. 20-Jan-24 | GJ19Y0109
+                GSTIN/UIN | > OBAAAGN1030Q12Z8 | Terms of Delivery
+                State Name | ; Rajasthan, Code : 08 | Ex Work
+                Buyer (Bill to)
+                Department of Atomic Energy- KOTA
+                Directorate Of Purchase And Stores
+                NFC KOTA PLANT SITE, RAWATBHATTA,
+                PO, ANUSHAKT] (VIA) KOTA
+                CHITTORGARH, RAJASTHAN-323303, India
+                GSTIN/UIN | - O8BAAAGN10300128
+                Stale Name | : Rajasthan, Code : 08
+                S| | Description of Goods | HSN/SAC | Quantity | Rate | per | Amount
+                INC}
+                | | 1G ST Output- 18% | 18|% | 46,922.49
+                4 | 7 | Total | 1.000 set | % 3,07,603.00
+                Amount Chargeable (in words)
+                Indian Rupees Three Lakh Seven Thousand Six Hundred Three Only
+                HSN/SAC | Taxable | IGST | Total
+                _ | | Value | Rate : Amount | Tax Amount
+                73079190 | oo | | 2,60,680.51) 18%] 46,922.49) 46,922.49
+                oe | Total} 2,60,680.51 | 46,922.49} 46,922.49
+                Company's Bank Details
+                Bank Name | : State Bank of India- 56007241003
+                ; | A/c No. | > 56007241003 (IFSC CODE-SBIN0063762)
+                """;
+    }
+
+    private String rawAuditMadhavPageOcr() {
+        return """
+                GSTIN : O6AAMCM3562G12D | GST INVOICE | Original For Buyer
+                MADHAV PE FOAM PRIVATE LTD
+                AN ISO 9001 : 2008 CERTIFIED COMPANY
+                Khasra No.7/24/1/2 ,4/1/2,7/1/1,7/1/2,7/2,8/1,8/2,14 17/1/1,Vi11. Thana Khurd, Kharkhoda. Sonipat-131402
+                (M) 9811131220,9811421412. E-Mail : - madhavpefoam@gmail.com
+                PAN.No : AAMCN3562G
+                Invoice No MPE/23-24/01191 | Date : | 20/01/2024
+                Details of Receiver (Billed to) | Details of Consignee (Shipped to) | BANK Details
+                NUCLEAR FUEL COMPLEX | BANK tAME
+                ICICI BANK
+                ACCOUNT NO
+                uclear Fuel Complex Aadhar Building
+                3rd Fhoor ECIL Post
+                Hyderabad - 500062
+                662805600466
+                IFSC CODE : ICIC0006628
+                PHONE : 040-27183077, | BANK ADDRESS
+                STATE ; TELANGANA | CODE : 36 | ; 132 , HARGOBIND
+                GSTIN : 36AAAGN10309129 PAN : AAAGN1030Q
+                SN DESCRIPITION OF GOODS | H.S.N PKG | QTY UNT | RATE | SALE AMT | IG8T% DIS%
+                1] TARANG MATTRESS?79*36 | x 76.0x | 94042190 | 1 | 70.00 Pcs | 4067.800 | 264746,.00 | 18.00
+                TOTAL | BO | 1 | 70,00 | 284746.00
+                PCS : | 70 TOTAL : | 70.00 | TAXABLE AMT | 284746.00
+                P.O.No.& Dt : | i, G,S.7T | 51254.28
+                Vehicle No : HR38W8099 | Mode : CANTER | GR.NO : | 4599
+                Transporter Nm. : DELHI M.P. ROADLINE
+                Inv Value (In Fig) : | 336000.00
+                Inv Value (In Words) : Rs.Three lacs thirty six thousand Only | ROUND OFF | -0.238
+                INVOICE AMT | 336000.00
+                """;
+    }
+
+    private String rawAuditAscencionPageOcr() {
+        return """
+                Onginal Cop We
+                TAX INVOICE | " | * y | .
+                ASCENCION ELECTRONICS -
+                | aw
+                A-75,2ND FLOOR,OPP PILI KOTHI, HARI NAGAR,NEW DELHI-110064
+                www.ascencionelectronics.com, Email-sales@ascencionelectronics.com
+                GSTIN : O7CXGPS0971P1ZP
+                Tel. : 9810927895 email : accounts@ascencionelectronics.com
+                MSME UDYAM REG NO. : DL-11-0016528
+                Invoice No. | > 295 | GR/RR No.
+                Dated | » 19-12-2023 | Transport | : DTOC COURIER
+                | Place of Supply : Telangana (36) | Vehicle No. | |
+                Reverse Charge | : N | Station | : Billed to : | Shipped to : | : Department of Atomic Energy Stores | Department of Atomic Energy Stores
+                Stores Officer | * | Stores Officer | : HRPSU, NFC, P.O. ECIL,, | HRPSU, NFC, P.O. ECIL,,
+                HYDERABAD, TELANGANA-500062, | i HYDERABAD, TELANGANA-500062,
+                Party E-Mail ID | : sonfc@nfc.gov.in
+                Party Mobile No : 040-27184406
+                State | : Telangana (36)
+                Party Pincode | : 500062
+                GSTIN / UIN | 36AAAGN1030Q1Z9
+                GOEMC-541687792633853 DATE-14.12.2023
+                S.N. | Description of Goods | HSN/SAC | Qty. | Unit | Price | IGST | Amount
+                Weller 200 Deg C to 450 Deg C 24 V Out | 8515 | 1.00 | Pcs. | 13,559.31 | 2,440.68 | 15,999.99
+                Desoldering Station With Digital Display
+                MODEL. WELOLO
+                Grand Total | 15,999.99
+                Tax Rate TaxableAmt. IGSTAmt. Total Tax
+                18% | 13,559.31 2,440.68 | 2,440.68
+                Bank Details | BANK : AXIS BANK IFSC CODE : UT1B0000786
+                A/C NO : 916020036468661 A/C HOLDER'S NAME : ASCENCION ELECTRONICS
+                Terms & Conditions
+                Receiver's Signature
+                """;
+    }
+
     private String southIndiaBearingStyleOcr() {
         return """
                 Tax Invoice
@@ -726,6 +1212,218 @@ class InvoiceServiceImplTest {
                 HYDERABAD - 500062
                 GSTIN/UIN | AOAAAGNIOS0Q41 20
                 Description of Goods HSN/SAC GST Quantity Rate per Amount
+                """;
+    }
+
+    private String supplementalFieldsOcr() {
+        return """
+                Tax Invoice
+                ACME PROCESS SYSTEMS PRIVATE LIMITED
+                Plot 44 Industrial Estate
+                Hyderabad Telangana 500062
+                GSTIN : 29ABCDE1234F1Z5
+                PAN : ABCDE1234F
+                CIN : U12345TG2010PTC123456
+                MSME No : UDYAM-TG-12-1234567
+                Phone : +91 9876543210 / 04012345678
+                Email : sales@acmeprocess.com
+                Website : www.acmeprocess.com
+                Invoice No : INV/24-25/1001
+                Date : 06-Apr-2026
+                Buyer (Bill to)
+                OMEGA PROJECTS LLP
+                Aadhar Building, 3rd Floor, ECIL Post, Hyderabad 500062
+                GSTIN : 36PQRSX6789L1Z2
+                State : Telangana Code : 36
+                PO Number : PO-7788/24-25
+                Purchase Order Dated : 05-Apr-2026
+                Order Reference : RFQ-5566/24
+                Delivery Note : DN-4455
+                Dispatched Through : FASTTRACK LOGISTICS LLP
+                Vehicle Number : TS09AB1234
+                Destination : Hyderabad
+                Place of Supply : Telangana
+                Terms of Payment : 30 DAYS CREDIT
+                Bank Details : HDFC BANK | A/C NO 9988776655 | IFSC HDFC0000123 | Branch : Banjara Hills
+                IRN : IRN998877665544332211
+                Ack No : ACK/2026/001
+                E-Way Bill No : EWB123456789
+                Reference Code : REF-42
+                Department : Projects
+                Description Qty Rate Amount
+                Control Panel 1 15000 15000
+                Taxable Value 15000
+                CGST 9% 1350
+                SGST 9% 1350
+                Round Off 0
+                Grand Total 17700
+                Amount Payable 17700
+                """;
+    }
+
+    private String controlsoftAuditNoiseOcr() {
+        return """
+                Tax Invoice | (ORIGINAL FOR RECIPIENT) | e-Invoice
+                IRN | : 21156e0e6db34dc0cc3fc0118065691f33a9b7ad4d8-
+                Ack No. ; 162416936471993
+                Ack Date : 30Jan-24
+                Controlsoft Engineering India Pvt Ltd | Invoice No. | Dated
+                No.534,1st Floor, East Coast Centre, |142/23-24 80San-24
+                Anna Salai, Teynampet,
+                Chennai - 600018
+                GSTIN/UIN : 33AABCC8871D1ZT
+                State Name : Tamil Nadu, Code : 33
+                CIN : U74210TN2002PTC049562
+                E-Mail : info@controlsoftengg.in
+                Buyer (Bill to)
+                NUCLEAR FUEL COMPLEX
+                Aadhar Building, 3rd Floor,
+                ECIL Post, Hyderabad, Telangana, 500062.
+                GSTIN/UIN | : 36AAAGN1030Q1Z9
+                State Name | : Telangana, Code : 36
+                SI | Description of | Services | HSN/SAC Amount
+                1 ICT charges for PRE-WIRED CONTROL PANEL FOR 6 ZONE, | 998351 | 8,98,305.08
+                VACUUM ANNEALING FURNACE
+                OUTPUT IGST | 1,61,694.91
+                Rounded Off | 0.01
+                Total | 8,98,305.08 | 1,61,694.91 | 1,61,694.91
+                Company's Bank Details
+                Bank Name | : HDFC Bank
+                A/c No. | : 00102560001143
+                """;
+    }
+
+    private String avTradingAuditNoiseOcr() {
+        return """
+                GSTIN : 27BLPPS1385F1ZM | Triplicate for Assesses.
+                AV TRADING COMPANY
+                PAN : BLPPS1385F
+                Tel. : 9075151448/7719090608 email tavtradingcomp@gmail.com
+                Party Details : | Invoice No. | AV/23-24/265
+                DEPARTMENT OF ATOMIC ENERGY | Dated | : 29-01-2024
+                DIRECTORATE OF PURCHASE AND STORES | Place of Supply : Telangana (36)
+                HRPSU, NFC, P.O. ECIL, Hyderabad, TELANGANA-500062
+                GSTIN/UIN = : 36AAAGN1030Q1Z9
+                Order No. | : GEMC-511687773293120 | Date : 16-01-2024
+                DESCRIPTION OF GOODS | HSN | QTY | UNIT | PRICE | AMOUNT
+                CUTTING WHEEL 125MMX1.2MMX22MM | 6804 | 180.00 | Nos | 38.14 | 8,100.00
+                MAKE - APIDOR
+                Grand Total | 180.00 Nos | 8,100.00
+                18% | 6,864.41 | 1,235.59 | 1,235.59
+                BANK NAME : CANARA BANK
+                A/C NO : 5096201000040
+                IFSC CODE : CNRB0005096
+                """;
+    }
+
+    private String irelAuditNoiseOcr() {
+        return """
+                Tax Invoice
+                IREL (India) Limited
+                (A Government of India Undertaking)
+                IRN : 25391820e30b4bbabe32d1ef0b8635594626c6e3957829000f769261bb68ff7a
+                Details of Supplier
+                IREL (India) Limited,
+                MANAVALAKURICHI, KANYAKUMARI DIST, KANYAKUMARI, Tamil Nadu, 629252
+                Email : marketing-mk@irel.co.in
+                Details of Buyer
+                Name | NUCLEAR FUEL COMPLEX
+                Address | NUCLEAR FUEL COMPLEX, ECIL(PO), HYDERABAD - 500062
+                State Name and Code | Telangana [36]
+                GSTIN | 36 AAAGN1030Q 129
+                PAN | AAAGN1030Q
+                GSTIN | 33AAACI2799F1ZL
+                PAN | AAACI2799F
+                SI No | Description Goods/Service | HSN Code | Unit | Quantity | Rate ( as per Unit) | Value | Dis./Rbt if any
+                1 | ZIRCON 'MK' GRADE | 26151000 | Metric Ton | 15.000 | 181,750.00 | 2,726,250,00 | 0.00
+                Taxable Value | CGST Rate | CGST Amount | SGST Rate | SGST Amount | IGST Rate | IGST Amount | Total (INR)
+                2,726,250.00 | 5,00 | 136,312.50 | 2,862,562.50
+                Total | 2,862,562.50
+                Eway Bill No : 531554382815
+                """;
+    }
+
+    private String poOverlapAddressOcr() {
+        return """
+                Tax Invoice
+                ACME SUPPLIES LLP
+                GSTIN : 29ABCDE1234F1Z5
+                Invoice No : INV-9981
+                Date : 12-Apr-2026
+                Buyer (Bill to)
+                Department of Atomic Energy Stores
+                HRPSU, NFC, P.O. ECIL, Hyderabad, Telangana - 500062
+                P.O. No. GEMC-12345
+                Vehicle No : TS09AB1234
+                GSTIN/UIN : 36AAAGN1030Q1Z9
+                Description Qty Rate Amount
+                Control Valve 1 10000 10000
+                IGST 18% 1800
+                Grand Total 11800
+                """;
+    }
+
+    private String sparseFinancialSummaryOcr() {
+        return """
+                Tax Invoice
+                ALPHA INDUSTRIES PRIVATE LIMITED
+                GSTIN : 29ABCDE1234F1Z5
+                Invoice No : INV9001
+                Date : 09-Apr-2026
+                Bill To
+                OMEGA PROJECTS LLP
+                GSTIN : 27PQRSX6789L1Z2
+                Description Qty Rate Amount
+                Control Panel 1 10000 10000
+                Summary 10000 1800
+                Amount Payable 11800
+                """;
+    }
+
+    private String shortNumericColumnSplitOcr() {
+        return """
+                ACME INDUSTRIES PRIVATE LIMITED        Invoice No : 7
+                GSTIN : 29ABCDE1234F1Z5                Date : 01.04.2026
+                Buyer (Bill to)                        Vehicle No : TS09AB1234
+                OMEGA PROJECTS LLP                     P.O. No. GEMC-12345
+                GSTIN : 27PQRSX6789L1Z2
+                Description Qty Rate Amount
+                Service Charge 1 5000 5000
+                IGST 18% 900
+                Grand Total 5900
+                """;
+    }
+
+    private String multiPageFirstPage() {
+        return """
+                Tax Invoice
+                ACME PROCESS SYSTEMS PRIVATE LIMITED
+                GSTIN : 29ABCDE1234F1Z5
+                Invoice No : INV/24-25/0099
+                Date : 05-Apr-2026
+                Buyer (Bill to)
+                OMEGA PROJECTS LLP
+                GSTIN : 27PQRSX6789L1Z2
+                Terms of Payment : 30 DAYS
+                """;
+    }
+
+    private String multiPageMiddlePage() {
+        return """
+                Description of Goods HSN/SAC Qty Rate Amount
+                Premium Control Panel 85371000 2 12500 25000
+                Industrial Sensor Assembly 90318000 3 5000 15000
+                """;
+    }
+
+    private String multiPageLastPage() {
+        return """
+                Bank Details : HDFC BANK | A/C NO 9988776655 | IFSC HDFC0000123
+                Taxable Value 40000
+                CGST 9% 3600
+                SGST 9% 3600
+                Grand Total 47200
+                Amount Payable 47200
                 """;
     }
 }

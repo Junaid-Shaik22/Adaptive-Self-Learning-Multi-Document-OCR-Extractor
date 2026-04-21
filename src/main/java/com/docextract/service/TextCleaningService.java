@@ -9,16 +9,15 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * TextCleaningService – normalises raw Tesseract output for reliable parsing.
+ * TextCleaningService - normalises raw Tesseract output for reliable parsing.
  *
  * Operations (in order):
  *  1. Null/empty guard
  *  2. Convert to UPPERCASE
- *  3. Fix common OCR character substitutions (0↔O, 1↔I, 5↔S, 8↔B)
- *     (applied only in context – not blindly, to preserve real characters)
+ *  3. Fix common OCR character substitutions in context
  *  4. Remove non-printable / control characters
- *  5. Normalize whitespace (collapse multiple spaces/tabs → single space)
- *  6. Preserve line breaks (important for field detection)
+ *  5. Normalize whitespace
+ *  6. Preserve line breaks
  *  7. Strip leading/trailing whitespace per line
  *  8. Remove completely blank lines (> 2 consecutive)
  */
@@ -27,10 +26,10 @@ import java.util.regex.Pattern;
 public class TextCleaningService {
 
     // Patterns compiled once
-    private static final Pattern CTRL_CHARS       = Pattern.compile("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]");
-    private static final Pattern MULTI_SPACE       = Pattern.compile("[ \\t]+");
-    private static final Pattern MULTI_NEWLINE     = Pattern.compile("\\n{3,}");
-    private static final Pattern SPECIAL_CHARS     = Pattern.compile("[^A-Z0-9\\s/\\-.:,()#@&'\"\\[\\]]");
+    private static final Pattern CTRL_CHARS = Pattern.compile("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]");
+    private static final Pattern MULTI_SPACE = Pattern.compile("[ \\t]+");
+    private static final Pattern MULTI_NEWLINE = Pattern.compile("\\n{3,}");
+    private static final Pattern SPECIAL_CHARS = Pattern.compile("[^A-Z0-9\\s/\\-.:,()#@&'\"\\[\\]]");
 
     /**
      * Clean and normalise a raw OCR string.
@@ -112,12 +111,12 @@ public class TextCleaningService {
         return String.join("\n", uniqueLines.values()).strip();
     }
 
-    // ─── OCR correction heuristics ────────────────────────────────────────────
+    // OCR correction heuristics
 
     /**
      * Fix common OCR misreads contextually:
-     * - In purely numeric contexts: O→0, I→1, S→5, B→8, Z→2
-     * - In purely alpha contexts:   0→O (rare but happens in names)
+     * - In numeric/date tokens: O->0, I->1, S->5, B->8, Z->2
+     * - Avoid blanket replacements on mixed identifiers like DL/PAN prefixes
      */
     private String fixOcrMistakesContextual(String text) {
         StringBuilder result = new StringBuilder();
@@ -131,23 +130,56 @@ public class TextCleaningService {
     private String fixLine(String line) {
         line = restoreCommonLabels(line);
 
-        // Detect if the line looks like it should be mostly numeric
-        // (e.g. Aadhaar number line: "1234 O678 9012" → "1234 0678 9012")
-        // Heuristic: if line has >50% digits after ignoring spaces, treat as numeric
-        String digitsOnly = line.replaceAll("[^0-9]", "");
-        String alphaOnly  = line.replaceAll("[^A-Z]", "");
-
-        if (digitsOnly.length() > 0 && digitsOnly.length() >= alphaOnly.length()) {
-            // Numeric-dominant line: replace letter lookalikes with digits
-            line = line.replace("O", "0")
-                       .replace("I", "1")
-                       .replace("L", "1")
-                       .replace("S", "5")
-                       .replace("B", "8")
-                       .replace("Z", "2")
-                       .replace("G", "6");
+        String[] parts = line.split("\\s+");
+        StringBuilder rebuilt = new StringBuilder();
+        for (String part : parts) {
+            if (part.isEmpty()) {
+                continue;
+            }
+            if (rebuilt.length() > 0) {
+                rebuilt.append(' ');
+            }
+            rebuilt.append(shouldNormaliseAsNumeric(part) ? normaliseNumericToken(part) : part);
         }
-        return restoreCommonLabels(line);
+
+        return restoreCommonLabels(rebuilt.toString());
+    }
+
+    private boolean shouldNormaliseAsNumeric(String token) {
+        String compact = token.replaceAll("[^A-Z0-9]", "");
+        if (compact.length() < 4) {
+            return false;
+        }
+
+        if (compact.matches("^[A-Z]{2,}[A-Z0-9]*$")) {
+            return false;
+        }
+
+        if (token.matches("^[0-9OQDILSZBG]{1,2}[/\\-.][0-9OQDILSZBG]{1,2}[/\\-.][0-9OQDILSZBG]{4}$")) {
+            return true;
+        }
+
+        long digitLikeChars = compact.chars()
+                .filter(ch -> Character.isDigit(ch) || "OQDILSZBG".indexOf(ch) >= 0)
+                .count();
+
+        return digitLikeChars >= compact.length() - 1;
+    }
+
+    private String normaliseNumericToken(String token) {
+        StringBuilder builder = new StringBuilder(token.length());
+        for (char ch : token.toCharArray()) {
+            builder.append(switch (ch) {
+                case 'O', 'Q', 'D' -> '0';
+                case 'I', 'L' -> '1';
+                case 'Z' -> '2';
+                case 'S' -> '5';
+                case 'B' -> '8';
+                case 'G' -> '6';
+                default -> ch;
+            });
+        }
+        return builder.toString();
     }
 
     private int scoreLine(String line) {
@@ -189,6 +221,8 @@ public class TextCleaningService {
 
     private String restoreCommonLabels(String line) {
         return line.replace("D08", "DOB")
+                   .replace(" D0B", " DOB")
+                   .replace("/D0B", "/DOB")
                    .replace("D0B", "DOB")
                    .replace("B4/D0B", "B4/DOB")
                    .replace("BA/D0B", "BA/DOB")

@@ -20,7 +20,7 @@ public class UnifiedOpenApiInfoConfig {
             info.setDescription("""
                     ## Unified OCR Extraction System
 
-                    Extracts structured data from both invoice documents and Indian identity documents.
+                    Extracts structured data from invoices, medical leave certificates, and Indian identity documents.
 
                     ### Invoice OCR
                     - Invoice Number
@@ -30,6 +30,12 @@ public class UnifiedOpenApiInfoConfig {
                     - Subtotal, Tax Amount, Total Amount
                     - Line Items (when detected)
 
+                    ### Medical Leave Certificate OCR
+                    - Organization Name
+                    - Applicant Name
+                    - Leave From Date / To Date
+                    - Total Absent Days
+
                     ### Indian ID Document OCR
                     - **Aadhaar Card** - Name, Aadhaar Number, DOB, Gender, Address
                     - **PAN Card** - Name, Father Name, DOB, PAN Number
@@ -37,6 +43,7 @@ public class UnifiedOpenApiInfoConfig {
 
                     ### Available APIs
                     - `/api/invoice/extract` - Invoice OCR extraction
+                    - `/api/medical/extract` - Medical leave certificate extraction
                     - `/extract-document` - Indian ID document OCR extraction
 
                     ### Supported Input Formats

@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
 public class BuyerExtractor implements FieldExtractor<String> {
     private static final List<String> TRIGGERS = List.of(
             "buyer (bill to)", "buyer", "bill to", "billed to", "details of recipient",
-            "details of receiver", "consignee", "ship to", "to"
+            "details of receiver", "details of buyer", "details of purchaser", "consignee", "ship to", "shipped to", "to"
     );
     private static final List<String> ORGANIZATION_KEYWORDS = List.of(
             "department", "directorate", "industries", "solutions", "limited", "private", "stores",
@@ -77,19 +77,30 @@ public class BuyerExtractor implements FieldExtractor<String> {
         FieldExtractionResult<String> best = new FieldExtractionResult<>(null, "fallback", null);
         int bestScore = Integer.MIN_VALUE;
         for (int i = 0; i < zones.middleZone.size(); i++) {
-            String lower = zones.middleZone.get(i).getText().toLowerCase(Locale.ROOT);
+            LineIndexingService.IndexedLine anchorLine = zones.middleZone.get(i);
+            String lower = anchorLine.getText().toLowerCase(Locale.ROOT);
             if (!matchesTriggerLine(lower, trigger)) {
                 continue;
             }
             List<String> block = new ArrayList<>();
             Integer startLine = null;
-            String inlineCandidate = inlineBuyerName(zones.middleZone.get(i).getText(), trigger);
+            String inlineCandidate = inlineBuyerName(anchorLine.getText(), trigger);
             if (isValid(inlineCandidate)) {
                 block.add(inlineCandidate);
-                startLine = zones.middleZone.get(i).getLineNumber();
+                startLine = anchorLine.getLineNumber();
             }
             for (int j = i + 1; j < zones.middleZone.size(); j++) {
-                String text = zones.middleZone.get(j).getText();
+                LineIndexingService.IndexedLine currentLine = zones.middleZone.get(j);
+                if (!sameColumn(anchorLine, currentLine)) {
+                    if (columnCollision(anchorLine, currentLine)) {
+                        break;
+                    }
+                    continue;
+                }
+                if (hasLargeVerticalGap(anchorLine, currentLine)) {
+                    break;
+                }
+                String text = currentLine.getText();
                 if (stopCondition(text, buyerGstin)) {
                     break;
                 }
@@ -99,7 +110,7 @@ public class BuyerExtractor implements FieldExtractor<String> {
                         block.add(sanitized);
                     }
                     if (startLine == null) {
-                        startLine = zones.middleZone.get(j).getLineNumber();
+                        startLine = currentLine.getLineNumber();
                     }
                 }
                 if (!block.isEmpty() && isAddressContinuation(text)) {
@@ -131,14 +142,22 @@ public class BuyerExtractor implements FieldExtractor<String> {
         int bestScore = Integer.MIN_VALUE;
         String normalizedGstin = buyerGstin.replaceAll("\\s+", "").toUpperCase(Locale.ROOT);
         for (int i = 0; i < zones.middleZone.size(); i++) {
-            String compactLine = zones.middleZone.get(i).getText().replaceAll("\\s+", "").toUpperCase(Locale.ROOT);
+            LineIndexingService.IndexedLine gstinLine = zones.middleZone.get(i);
+            String compactLine = gstinLine.getOriginalText().replaceAll("\\s+", "").toUpperCase(Locale.ROOT);
             if (!compactLine.contains(normalizedGstin)) {
                 continue;
             }
             List<String> block = new ArrayList<>();
             Integer startLine = null;
             for (int j = Math.max(0, i - 4); j < i; j++) {
-                String raw = zones.middleZone.get(j).getText();
+                LineIndexingService.IndexedLine currentLine = zones.middleZone.get(j);
+                if (!sameColumn(gstinLine, currentLine)) {
+                    if (columnCollision(gstinLine, currentLine)) {
+                        break;
+                    }
+                    continue;
+                }
+                String raw = currentLine.getText();
                 if (stopCondition(raw, buyerGstin)) {
                     block.clear();
                     startLine = null;
@@ -150,7 +169,7 @@ public class BuyerExtractor implements FieldExtractor<String> {
                         block.add(sanitized);
                     }
                     if (startLine == null) {
-                        startLine = zones.middleZone.get(j).getLineNumber();
+                        startLine = currentLine.getLineNumber();
                     }
                 }
             }
@@ -210,12 +229,49 @@ public class BuyerExtractor implements FieldExtractor<String> {
         if (normalizedGstin == null) {
             return -1;
         }
+        LineIndexingService.IndexedLine sourceLine = null;
         for (LineIndexingService.IndexedLine line : lines) {
-            if (line.getText().replaceAll("\\s+", "").toUpperCase(Locale.ROOT).contains(normalizedGstin)) {
+            if (line.getLineNumber() == lineNumber) {
+                sourceLine = line;
+                break;
+            }
+        }
+        for (LineIndexingService.IndexedLine line : lines) {
+            if (sourceLine != null && !sameColumn(sourceLine, line)) {
+                continue;
+            }
+            if (line.getOriginalText().replaceAll("\\s+", "").toUpperCase(Locale.ROOT).contains(normalizedGstin)) {
                 return Math.abs(line.getLineNumber() - lineNumber);
             }
         }
         return -1;
+    }
+
+    private boolean sameColumn(LineIndexingService.IndexedLine anchor, LineIndexingService.IndexedLine candidate) {
+        if (anchor == null || candidate == null) {
+            return false;
+        }
+        return anchor.getColumn() == LineIndexingService.Column.FULL_WIDTH
+                || candidate.getColumn() == LineIndexingService.Column.FULL_WIDTH
+                || anchor.getColumn() == candidate.getColumn();
+    }
+
+    private boolean hasLargeVerticalGap(LineIndexingService.IndexedLine anchor, LineIndexingService.IndexedLine candidate) {
+        return anchor != null && candidate != null && Math.abs(candidate.getY() - anchor.getY()) > 180;
+    }
+
+    private boolean columnCollision(LineIndexingService.IndexedLine anchor, LineIndexingService.IndexedLine candidate) {
+        if (anchor == null || candidate == null) {
+            return false;
+        }
+        if (anchor.getColumn() == LineIndexingService.Column.FULL_WIDTH
+                || candidate.getColumn() == LineIndexingService.Column.FULL_WIDTH
+                || anchor.getColumn() == candidate.getColumn()) {
+            return false;
+        }
+        int horizontalDelta = Math.abs(anchor.getX() - candidate.getX());
+        int verticalDelta = Math.abs(anchor.getY() - candidate.getY());
+        return horizontalDelta >= 140 && verticalDelta >= 35;
     }
 
     private boolean containsTrigger(String value) {
@@ -242,7 +298,8 @@ public class BuyerExtractor implements FieldExtractor<String> {
         if (lower.contains("invoice details") || lower.contains("nvoice detals")
                 || lower.contains("reference no") || lower.contains("buyers order")
                 || lower.contains("buyer's order") || lower.contains("purchase order")
-                || lower.contains("mode/terms") || lower.contains("delivery note")) {
+                || lower.contains("mode/terms") || lower.contains("delivery note")
+                || lower.contains("terms of payment") || lower.contains("payment terms")) {
             return true;
         }
         if (lower.contains("description") || lower.contains("grand total") || lower.contains("amount payable")
@@ -257,7 +314,7 @@ public class BuyerExtractor implements FieldExtractor<String> {
         int bestScore = Integer.MIN_VALUE;
         for (String fragment : OcrLayoutUtil.fragments(txt)) {
             for (String part : fragment.split("\\s*,\\s*")) {
-                String candidate = stripFieldLabels(trimTrailingNoise(
+                String candidate = stripFieldLabels(cleanTrailingNoise(
                         OcrLayoutUtil.truncateAtKeyword(part, OcrLayoutUtil.BUYER_STOP_KEYWORDS)));
                 int score = scoreNameCandidate(candidate);
                 if (score > bestScore) {
@@ -283,7 +340,7 @@ public class BuyerExtractor implements FieldExtractor<String> {
         if (lower.contains("gstin") || lower.contains("invoice") || OcrLayoutUtil.isLogisticsLike(lower)) {
             return false;
         }
-        if (lower.matches("^[()\\s.:,-]*(?:ship to|bill to|billed to|consignee|buyer|to)[()\\s.:,-]*$")) {
+        if (lower.matches("^[()\\s.:,-]*(?:ship to|shipped to|bill to|billed to|consignee|buyer|to)[()\\s.:,-]*$")) {
             return false;
         }
         if (lower.contains("original") || lower.contains("duplicate") || lower.contains("copy")) {
@@ -365,7 +422,7 @@ public class BuyerExtractor implements FieldExtractor<String> {
                 && (RegexUtil.containsAnyKeyword(lower, ORGANIZATION_KEYWORDS) || second.length() <= 40);
     }
 
-    private String trimTrailingNoise(String value) {
+    private String cleanTrailingNoise(String value) {
         String normalized = RegexUtil.normalizeLine(value);
         normalized = normalized.replaceAll("(?i)\\b(?:details of recipient|details of consignee)\\b", "").trim();
         normalized = normalized.replaceFirst("(?i)\\bGEMC[-A-Z0-9/]{6,}.*$", "").trim();
@@ -461,8 +518,8 @@ public class BuyerExtractor implements FieldExtractor<String> {
             } else if (lower.contains(trigger)) {
                 candidate = normalized.replaceFirst("(?i)^.*?" + Pattern.quote(trigger) + "\\s*[:,-]?\\s*", "");
             }
-            candidate = candidate.replaceFirst("(?i)^\\(?\\s*(?:ship to|bill to|billed to|consignee|buyer)\\s*\\)?\\s*[:,-]?\\s*", "");
-            candidate = stripFieldLabels(trimTrailingNoise(
+            candidate = candidate.replaceFirst("(?i)^\\(?\\s*(?:ship to|shipped to|bill to|billed to|consignee|buyer)\\s*\\)?\\s*[:,-]?\\s*", "");
+            candidate = stripFieldLabels(cleanTrailingNoise(
                     OcrLayoutUtil.truncateAtKeyword(candidate, OcrLayoutUtil.BUYER_STOP_KEYWORDS)));
             if (isValid(candidate)) {
                 return candidate;
@@ -500,10 +557,10 @@ public class BuyerExtractor implements FieldExtractor<String> {
     }
 
     private List<String> primaryTriggers() {
-        return List.of("buyer (bill to)", "buyer", "bill to", "billed to", "details of recipient", "details of receiver");
+        return List.of("buyer (bill to)", "buyer", "bill to", "billed to", "details of recipient", "details of receiver", "details of buyer", "details of purchaser");
     }
 
     private List<String> fallbackTriggers() {
-        return List.of("consignee", "ship to", "to");
+        return List.of("consignee", "ship to", "shipped to", "to");
     }
 }

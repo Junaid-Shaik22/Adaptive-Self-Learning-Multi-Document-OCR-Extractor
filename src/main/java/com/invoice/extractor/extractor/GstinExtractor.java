@@ -166,12 +166,16 @@ public class GstinExtractor implements FieldExtractor<String[]> {
         score += "MIDDLE".equals(candidate.zone) ? 4 : 0;
         score += candidate.labeled ? 26 : 0;
         score += candidate.labelStrength * 8;
+        score += RegexUtil.hasGstinChecksum(candidate.value) ? 24 : -12;
         score += candidate.occurrences > 1 ? Math.min(18, (candidate.occurrences - 1) * 6) : 0;
         score += candidate.transportLike ? -95 : 0;
         score += candidate.buyerSection ? -105 : 0;
         score += candidate.disallowedBuyerLine ? -120 : 0;
         score += candidate.sectionDistance <= 1 ? -40 : 0;
         score += "BOTTOM".equals(candidate.zone) ? -120 : 0;
+        // Heavy penalty if GSTIN belongs to known government entity (likely buyer)
+        score += isGovernmentEntityGstin(candidate.value) ? -150 : 0;
+        score += candidate.governmentContext ? -30 : 0;
         return score;
     }
 
@@ -183,12 +187,15 @@ public class GstinExtractor implements FieldExtractor<String[]> {
         score += candidate.sectionDistance == 1 ? 12 : 0;
         score += candidate.labeled ? 24 : 0;
         score += candidate.labelStrength * 8;
+        score += RegexUtil.hasGstinChecksum(candidate.value) ? 24 : -12;
         score += candidate.governmentContext ? 12 : 0;
         score += candidate.occurrences > 1 ? Math.min(15, (candidate.occurrences - 1) * 5) : 0;
         score += candidate.transportLike ? -120 : 0;
         score += candidate.disallowedBuyerLine ? -130 : 0;
         score += "TOP".equals(candidate.zone) && !candidate.buyerSection ? -55 : 0;
         score += "BOTTOM".equals(candidate.zone) ? -120 : 0;
+        // Boost if GSTIN belongs to known government entity (likely buyer)
+        score += isGovernmentEntityGstin(candidate.value) ? 80 : 0;
         return score;
     }
 
@@ -279,18 +286,45 @@ public class GstinExtractor implements FieldExtractor<String[]> {
                 collectCandidateToken(matches, tokenMatcher.group(), labeledLine);
             }
             collectSlidingWindowCandidates(matches, fragment, labeledLine);
+            collectDeletionCandidates(matches, fragment, labeledLine);
         }
         return new ArrayList<>(matches);
     }
 
     private void collectSlidingWindowCandidates(Set<String> matches, String fragment, boolean labeledLine) {
-        String normalized = fragment == null ? "" : fragment.replaceAll("[^A-Za-z0-9]", "").toUpperCase();
-        if (normalized.length() <= 15 || normalized.length() > 18) {
+        String normalized = stripGstinLabel(fragment).replaceAll("[^A-Za-z0-9]", "").toUpperCase();
+        int maxLength = labeledLine ? 24 : 18;
+        if (normalized.length() <= 15 || normalized.length() > maxLength) {
             return;
         }
         for (int start = 0; start <= normalized.length() - 15; start++) {
             collectCandidateToken(matches, normalized.substring(start, start + 15), labeledLine);
         }
+    }
+
+    private void collectDeletionCandidates(Set<String> matches, String fragment, boolean labeledLine) {
+        if (!labeledLine || fragment == null) {
+            return;
+        }
+        String normalized = stripGstinLabel(fragment).replaceAll("[^A-Za-z0-9]", "").toUpperCase();
+        if (normalized.length() < 16 || normalized.length() > 24) {
+            return;
+        }
+        for (int drop = 0; drop < normalized.length(); drop++) {
+            String candidate = normalized.substring(0, drop) + normalized.substring(drop + 1);
+            if (candidate.length() != 15) {
+                continue;
+            }
+            collectCandidateToken(matches, candidate, true);
+        }
+    }
+
+    private String stripGstinLabel(String fragment) {
+        if (fragment == null) {
+            return "";
+        }
+        String normalized = fragment.replaceFirst("(?i)^.*?\\b(?:gstin/uin|gstin|gst\\s*no|gst\\s*in|uin|tin\\s*no|party\\s*gst)\\b\\s*[:#-]*\\s*", "");
+        return normalized.isBlank() ? fragment : normalized;
     }
 
     private void collectCandidateToken(Set<String> matches, String token, boolean labeledLine) {
@@ -301,7 +335,7 @@ public class GstinExtractor implements FieldExtractor<String[]> {
         if (normalized.length() != 15) {
             return;
         }
-        if (!labeledLine && !looksRepairableToken(normalized)) {
+        if (!RegexUtil.isValidGstin(normalized) && !looksRepairableToken(normalized)) {
             return;
         }
         if (RegexUtil.isValidGstin(normalized) && !needsRepair(normalized)) {
@@ -324,7 +358,12 @@ public class GstinExtractor implements FieldExtractor<String[]> {
 
     private boolean hasGstinLikeSignal(String text) {
         String lower = text == null ? "" : text.toLowerCase();
-        return lower.contains("gst")
+        return lower.contains("gstin")
+                || lower.contains("gstin/uin")
+                || lower.contains("gst in")
+                || lower.contains("gst no")
+                || lower.contains("gstin no")
+                || lower.contains("unique id")
                 || lower.contains("uin")
                 || lower.contains("tin no")
                 || lower.contains("partygst");
@@ -335,9 +374,31 @@ public class GstinExtractor implements FieldExtractor<String[]> {
         if (normalized.length() != 15) {
             return false;
         }
-        return normalized.charAt(13) == 'Z'
-                || normalized.charAt(13) == '2'
-                || normalized.substring(0, 2).matches("[0-9OILDQZSBTG]{2}");
+        if (!normalized.substring(0, 2).matches("[0-9OILDQZSBTG]{2}")) {
+            return false;
+        }
+        int letterLike = 0;
+        int digitLike = 0;
+        for (int index = 2; index <= 6; index++) {
+            char value = normalized.charAt(index);
+            if (Character.isLetter(value) || "01256789".indexOf(value) >= 0) {
+                letterLike++;
+            }
+        }
+        for (int index = 7; index <= 10; index++) {
+            char value = normalized.charAt(index);
+            if (Character.isDigit(value) || "OQDILZSBTG".indexOf(value) >= 0) {
+                digitLike++;
+            }
+        }
+        char panTail = normalized.charAt(11);
+        char entity = normalized.charAt(12);
+        char separator = normalized.charAt(13);
+        return letterLike >= 4
+                && digitLike >= 3
+                && (Character.isLetter(panTail) || "01256789".indexOf(panTail) >= 0)
+                && Character.isLetterOrDigit(entity)
+                && (separator == 'Z' || separator == '2');
     }
 
     private boolean needsRepair(String gstin) {
@@ -370,6 +431,17 @@ public class GstinExtractor implements FieldExtractor<String[]> {
             return true;
         }
         return OcrLayoutUtil.isLogisticsLike(lower) && !hasGstinLikeSignal(text);
+    }
+
+    /**
+     * Detect GSTINs belonging to known government entities (DAE, NFC, ECIL, etc.)
+     */
+    private boolean isGovernmentEntityGstin(String gstin) {
+        if (gstin == null || gstin.length() < 15) {
+            return false;
+        }
+        String pan = gstin.substring(2, 12);
+        return Set.of("AAAGN1030Q", "AAAGD0290L", "AAAGE0014G", "AAAGB0282M").contains(pan);
     }
 
     private List<SectionRange> buyerSections(LineIndexingService.Zones zones) {

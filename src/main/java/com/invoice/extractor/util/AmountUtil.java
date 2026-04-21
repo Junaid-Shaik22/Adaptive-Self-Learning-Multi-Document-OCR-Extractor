@@ -10,11 +10,11 @@ import java.util.Locale;
 import java.util.regex.Matcher;
 
 public class AmountUtil {
-    public static final double MIN_SIGNIFICANT_AMOUNT = 1000.0;
+    public static final double MIN_SIGNIFICANT_AMOUNT = 100.0;
     public static final List<String> TOTAL_KEYWORDS = List.of(
-            "grand total", "total", "invoice value", "total invoice value", "amount payable",
+            "grand total", "invoice value", "total invoice value", "amount payable",
             "net amount", "amount due", "total amount after tax", "value (figure)", "total after tax",
-            "invoice amt", "inv value", "inv value (in fig)", "invoice amount");
+            "invoice amt", "inv value", "inv value (in fig)", "invoice amount", "\\btotal\\b");
     public static final List<String> TAX_KEYWORDS = List.of(
             "igst", "cgst", "sgst", "tax amount", "total tax amount", "gst output", "add : igst",
             "add : cgst", "add : sgst", "integrated tax", "gst amount");
@@ -116,9 +116,20 @@ public class AmountUtil {
                     .replaceAll("(?i)rs\\.?", "")
                     .replace("₹", "")
                     .replace("INR", "")
-                    .replace(",", "")
                     .replace(" ", "")
                     .trim();
+            normalized = normalized.replaceAll(",\\.(?=\\d)", ".");
+            if (normalized.indexOf(',') >= 0 && normalized.indexOf('.') < 0) {
+                int lastComma = normalized.lastIndexOf(',');
+                String fractional = normalized.substring(lastComma + 1);
+                if (fractional.length() == 2) {
+                    normalized = normalized.substring(0, lastComma).replace(",", "") + "." + fractional;
+                } else {
+                    normalized = normalized.replace(",", "");
+                }
+            } else {
+                normalized = normalized.replace(",", "");
+            }
             if (normalized.isBlank()) {
                 return null;
             }

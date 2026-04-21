@@ -62,7 +62,10 @@ public class DocumentTypeDetector {
     };
     // DL pattern: state code + RTO + year + number
     private static final Pattern DL_NUMBER_PATTERN =
-            Pattern.compile("\\b[A-Z]{2}[-\\s]?\\d{2}[-\\s]?\\d{4}[-\\s]?\\d{7}\\b");
+            Pattern.compile("\\b[A-Z]{2}[-\\s]?\\d{2,3}[-\\s]?\\d{4}[-\\s]?\\d{7}\\b");
+
+    private static final Pattern DL_COMPACT_PATTERN =
+            Pattern.compile("\\b[A-Z]{2}\\d{13,14}\\b");
 
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -103,6 +106,7 @@ public class DocumentTypeDetector {
         if (AADHAAR_NUMBER_PATTERN.matcher(text).find()) aadhaarScore += 5;
         if (PAN_NUMBER_PATTERN.matcher(text).find())     panScore     += 5;
         if (DL_NUMBER_PATTERN.matcher(text).find())      dlScore      += 5;
+        if (DL_COMPACT_PATTERN.matcher(text).find())     dlScore      += 5;
 
         log.debug("Document type scores → AADHAAR={} PAN={} DL={}", aadhaarScore, panScore, dlScore);
 

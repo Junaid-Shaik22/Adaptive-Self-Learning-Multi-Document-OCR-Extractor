@@ -48,13 +48,13 @@ public class DrivingLicenseExtractor implements DocumentExtractor {
             "\\b([A-Z]{2}[0-9]{13,14})\\b");
 
     private static final Pattern DOB_LABEL = Pattern.compile(
-            "(?:DOB|DATE OF BIRTH|D\\.O\\.B)[:\\s]+([0-9]{1,2}[/\\-.][0-9]{1,2}[/\\-.](?:19|20)[0-9]{2})");
+            "(?:DOB|DATE OF BIRTH|D\\.O\\.B)[:\\s]+([0-9OQDILSZBG]{1,2}[/\\-.][0-9OQDILSZBG]{1,2}[/\\-.][0-9OQDILSZBG]{4})");
 
     private static final Pattern VALID_FROM_LABEL = Pattern.compile(
-            "(?:VALID FROM|ISSUE DATE|VALIDITY FROM|ISSUED ON)[:\\s]+([0-9]{1,2}[/\\-.][0-9]{1,2}[/\\-.](?:19|20)[0-9]{2})");
+            "(?:VALID FROM|ISSUE DATE|VALIDITY FROM|ISSUED ON)[:\\s]+([0-9OQDILSZBG]{1,2}[/\\-.][0-9OQDILSZBG]{1,2}[/\\-.][0-9OQDILSZBG]{4})");
 
     private static final Pattern VALID_TO_LABEL = Pattern.compile(
-            "(?:VALID TO|VALID TILL|EXPIRY DATE|VALIDITY TO|VALID UPTO|EXPIRES ON)[:\\s]+([0-9]{1,2}[/\\-.][0-9]{1,2}[/\\-.](?:19|20)[0-9]{2})");
+            "(?:VALID TO|VALID TILL|EXPIRY DATE|VALIDITY TO|VALID UPTO|EXPIRES ON)[:\\s]+([0-9OQDILSZBG]{1,2}[/\\-.][0-9OQDILSZBG]{1,2}[/\\-.][0-9OQDILSZBG]{4})");
 
 
     private static final Pattern HOUSE_PATTERN = Pattern.compile(
@@ -64,7 +64,7 @@ public class DrivingLicenseExtractor implements DocumentExtractor {
     private static final String[] ADDR_KEYWORDS = {
         "S/O", "D/O", "W/O", "C/O", "HOUSE", "FLAT", "PLOT", "DOOR",
         "VILLAGE", "VPO", "PO", "DIST", "DISTRICT", "NEAR", "ROAD",
-        "STREET", "NAGAR", "COLONY", "WARD"
+        "STREET", "NAGAR", "COLONY", "WARD", "ADDRESS", "ADDR"
     };
 
     // DL document section keywords to skip when scanning for name
@@ -81,9 +81,13 @@ public class DrivingLicenseExtractor implements DocumentExtractor {
             "BLOOD GROUP"
     );
 
+    private static final Set<String> NAME_NOISE_FRAGMENTS = Set.of(
+            "SIGNAT", "LICEN", "LIGEN", "AUTH", "TELANGANA", "UNION"
+    );
+
     private static final Set<String> COMMON_NAME_WORDS = Set.of(
             "MOHD", "MOHAMMED", "MOHAMMAD", "KHADER", "VALI",
-            "FARAZUDDIN", "AHMED", "ALI", "KUMAR", "SINGH", "KHAN"
+            "FARAZUDDIN", "MOIZUDDIN", "AHMED", "ALI", "KUMAR", "SINGH", "KHAN"
     );
 
     @Override
@@ -106,8 +110,8 @@ public class DrivingLicenseExtractor implements DocumentExtractor {
         log.debug("DOB: {}", dob);
 
         // ── 3. Valid From / Valid To ───────────────────────────────────────────
-        String validFrom = extractDate(cleanedText, VALID_FROM_LABEL);
-        String validTo   = extractDate(cleanedText, VALID_TO_LABEL);
+        String validFrom = extractDate(lines, cleanedText, VALID_FROM_LABEL, "VALID FROM", "ISSUE DATE", "VALIDITY FROM", "ISSUED ON");
+        String validTo   = extractDate(lines, cleanedText, VALID_TO_LABEL, "VALID TO", "VALID TILL", "EXPIRY DATE", "VALIDITY TO", "VALID UPTO", "EXPIRES ON");
         builder.validFrom(validFrom);
         builder.validTo(validTo);
         log.debug("Valid From: {}  |  Valid To: {}", validFrom, validTo);
@@ -133,7 +137,7 @@ public class DrivingLicenseExtractor implements DocumentExtractor {
         if (!errors.isEmpty()) builder.validationErrors(errors);
 
         int found = countNonNull(dlNumber, name, address, dob, validFrom, validTo);
-        builder.confidence(computeConfidence(found, 4));
+        builder.confidence(computeConfidence(found, 6));
 
         return builder.build();
     }
@@ -258,14 +262,14 @@ public class DrivingLicenseExtractor implements DocumentExtractor {
             if (!containsAny(line, "DOB", "DATE OF BIRTH", "BIRTH")) {
                 continue;
             }
-            List<String> dates = RegexUtility.findAll(RegexUtility.DATE_FULL, line);
+            List<String> dates = RegexUtility.findDates(line);
             if (!dates.isEmpty()) {
-                return RegexUtility.normaliseDate(dates.get(0));
+                return dates.get(0);
             }
             if (i + 1 < lines.size()) {
-                dates = RegexUtility.findAll(RegexUtility.DATE_FULL, lines.get(i + 1));
+                dates = RegexUtility.findDates(lines.get(i + 1));
                 if (!dates.isEmpty()) {
-                    return RegexUtility.normaliseDate(dates.get(0));
+                    return dates.get(0);
                 }
             }
         }
@@ -273,15 +277,34 @@ public class DrivingLicenseExtractor implements DocumentExtractor {
         return null;
     }
 
-    private String extractDate(String text, Pattern pattern) {
+    private String extractDate(List<String> lines, String text, Pattern pattern, String... labels) {
         Matcher m = pattern.matcher(text);
-        if (m.find()) return RegexUtility.normaliseDate(m.group(1));
+        if (m.find()) {
+            return RegexUtility.normaliseDate(m.group(1));
+        }
+
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            if (!containsAny(line, labels)) {
+                continue;
+            }
+
+            String candidate = RegexUtility.firstDate(line);
+            if (candidate == null && i + 1 < lines.size()) {
+                candidate = RegexUtility.firstDate(lines.get(i + 1));
+            }
+            if (candidate != null) {
+                return candidate;
+            }
+        }
+
         return null;
     }
 
     private String extractName(List<String> lines, String dob, String dlNumber) {
         String bestCandidate = null;
         int bestScore = Integer.MIN_VALUE;
+        int dlLineIndex = findDlAnchorIndex(lines, dlNumber);
 
         for (int i = 0; i < lines.size(); i++) {
             String line = cleanNameCandidate(lines.get(i));
@@ -290,11 +313,22 @@ public class DrivingLicenseExtractor implements DocumentExtractor {
                 continue;
             }
 
-            if (dlNumber != null && i > 0 && lines.get(i - 1).replaceAll("\\s", "").contains(dlNumber)) {
+            if (dlLineIndex >= 0) {
+                if (i == dlLineIndex + 1) {
+                    score += 120;
+                } else if (i == dlLineIndex + 2) {
+                    score += 70;
+                } else if (i > dlLineIndex + 2) {
+                    score -= Math.min(90, (i - dlLineIndex - 2) * 18);
+                }
+            } else if (dlNumber != null && i > 0 && lines.get(i - 1).replaceAll("\\s", "").contains(dlNumber)) {
                 score += 40;
             }
             if (i <= 4) {
                 score += 15;
+            }
+            if (i + 1 < lines.size() && isAddressStart(lines.get(i + 1), dlNumber)) {
+                score += 35;
             }
 
             if (score > bestScore) {
@@ -311,6 +345,9 @@ public class DrivingLicenseExtractor implements DocumentExtractor {
             return Integer.MIN_VALUE;
         }
         if (!line.matches("[A-Z][A-Z ]*")) {
+            return Integer.MIN_VALUE;
+        }
+        if (containsNameNoise(line)) {
             return Integer.MIN_VALUE;
         }
         if (dob != null && line.contains(dob)) {
@@ -420,9 +457,28 @@ public class DrivingLicenseExtractor implements DocumentExtractor {
         if (line == null) {
             return null;
         }
-        return line.replaceAll("[^A-Z ]", " ")
+        String[] tokens = line.replaceAll("[^A-Z0-9 ]", " ")
                 .replaceAll("\\s{2,}", " ")
-                .trim();
+                .trim()
+                .split("\\s+");
+
+        List<String> cleaned = new ArrayList<>();
+        for (String token : tokens) {
+            if (token.isBlank()) {
+                continue;
+            }
+            long letters = token.chars().filter(Character::isLetter).count();
+            long digits = token.chars().filter(Character::isDigit).count();
+            if (letters >= 2 && digits <= 2) {
+                token = RegexUtility.normaliseAlphabeticLookalikes(token);
+            }
+            token = token.replaceAll("[^A-Z]", "");
+            if (!token.isBlank()) {
+                cleaned.add(token);
+            }
+        }
+
+        return String.join(" ", cleaned).trim();
     }
 
     private boolean isAddressStart(String line, String dlNumber) {
@@ -463,11 +519,20 @@ public class DrivingLicenseExtractor implements DocumentExtractor {
                 return true;
             }
         }
-        return false;
+        return containsNameNoise(line);
     }
 
     private String cleanAddressLine(String rawLine) {
-        String cleaned = rawLine.replaceFirst("^[0-9]{1,3}[)\\].]\\s+", "")
+        String cleaned = rawLine.replaceFirst("^(?:ADDRESS|ADDR)\\s*:?\\s*", "")
+                .replaceFirst("^[0-9]{1,3}[)\\].]\\s+", "")
+                .replaceAll("(?i)\\bINDIAN UNION DRIVING LICEN[CS]E\\b", "")
+                .replaceAll("(?i)\\bTELANGANA STATE\\b", "")
+                .replaceAll("(?i)\\bSIGNAT\\w*\\b.*$", "")
+                .replaceAll("(?i)\\bLICEN\\w*\\s+AUTH\\w*\\b.*$", "")
+                .replaceAll("\\s+,", ",")
+                .replaceAll(",\\s*,", ",")
+                .replaceAll(",{2,}", ",")
+                .replaceAll(",\\s*$", "")
                 .replaceAll("\\s{2,}", " ")
                 .trim();
 
@@ -502,6 +567,15 @@ public class DrivingLicenseExtractor implements DocumentExtractor {
         return cleaned;
     }
 
+    private boolean containsNameNoise(String line) {
+        for (String fragment : NAME_NOISE_FRAGMENTS) {
+            if (line.contains(fragment)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void addAddressLine(List<String> collected, String candidate) {
         String candidateKey = comparableAddress(candidate);
         for (int i = 0; i < collected.size(); i++) {
@@ -532,6 +606,26 @@ public class DrivingLicenseExtractor implements DocumentExtractor {
         for (int i = 0; i < lines.size(); i++) {
             if (lines.get(i).replaceAll("\\s", "").contains(compact)) {
                 return i;
+            }
+        }
+        return -1;
+    }
+
+    private int findDlAnchorIndex(List<String> lines, String dlNumber) {
+        int directIndex = indexOfLineContaining(lines, dlNumber);
+        if (directIndex >= 0) {
+            return directIndex;
+        }
+
+        for (int i = 0; i < lines.size(); i++) {
+            if (dlNumber != null && dlNumber.equals(extractDlCandidateFromText(lines.get(i)))) {
+                return i;
+            }
+            if (i + 1 < lines.size()) {
+                String combined = lines.get(i) + " " + lines.get(i + 1);
+                if (dlNumber != null && dlNumber.equals(extractDlCandidateFromText(combined))) {
+                    return i;
+                }
             }
         }
         return -1;

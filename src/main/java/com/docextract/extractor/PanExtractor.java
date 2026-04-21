@@ -44,7 +44,7 @@ public class PanExtractor implements DocumentExtractor {
     // ─── PAN-specific label patterns ──────────────────────────────────────────
 
     private static final Pattern DOB_LABEL = Pattern.compile(
-            "(?:DATE OF BIRTH|DOB|D\\.O\\.B)[:\\s/]+([0-9]{2}[/\\-.][0-9]{2}[/\\-.][0-9]{4})");
+            "(?:DATE OF BIRTH|DOB|D\\.O\\.B)[:\\s/]+([0-9OQDILSZBG]{1,2}[/\\-.][0-9OQDILSZBG]{1,2}[/\\-.][0-9OQDILSZBG]{4})");
 
 
 
@@ -125,7 +125,7 @@ public class PanExtractor implements DocumentExtractor {
 
         for (int i = 0; i < lines.size(); i++) {
             String line = lines.get(i);
-            List<String> lineDates = RegexUtility.findAll(RegexUtility.DATE_FULL, line);
+            List<String> lineDates = RegexUtility.findDates(line);
             for (String rawDate : lineDates) {
                 String candidate = RegexUtility.normaliseDate(rawDate);
                 if (!isValidDate(candidate)) {
@@ -184,7 +184,7 @@ public class PanExtractor implements DocumentExtractor {
                 }
                 String cleanedCandidate = cleanPersonName(line);
                 if (isStrongPersonName(cleanedCandidate, dob)) {
-                    candidates.add(cleanedCandidate);
+                    addDistinctNameCandidate(candidates, cleanedCandidate);
                     if (candidates.size() == 2) {
                         break;
                     }
@@ -204,7 +204,7 @@ public class PanExtractor implements DocumentExtractor {
             for (String line : lines) {
                 String cleanedCandidate = cleanPersonName(line);
                 if (isStrongPersonName(cleanedCandidate, dob)) {
-                    candidates.add(cleanedCandidate);
+                    addDistinctNameCandidate(candidates, cleanedCandidate);
                 }
             }
 
@@ -231,25 +231,34 @@ public class PanExtractor implements DocumentExtractor {
         int bestScore = Integer.MIN_VALUE;
 
         for (int i = 0; i < lines.size(); i++) {
-            String compactLine = lines.get(i).replace(" ", "");
-            Matcher matcher = PAN_CANDIDATE.matcher(compactLine);
-            while (matcher.find()) {
-                String candidate = normalisePanCandidate(matcher.group());
-                if (candidate == null) {
-                    continue;
-                }
+            List<String> candidateSources = new ArrayList<>();
+            candidateSources.add(lines.get(i));
+            if (i + 1 < lines.size()) {
+                candidateSources.add(lines.get(i) + lines.get(i + 1));
+                candidateSources.add(lines.get(i) + " " + lines.get(i + 1));
+            }
 
-                int score = 40;
-                if (containsAny(lines.get(i), "PERMANENT ACCOUNT", "ACCOUNT NUMBER", "PAN")) {
-                    score += 30;
-                }
-                if (i > 0 && containsAny(lines.get(i - 1), "PERMANENT ACCOUNT", "ACCOUNT NUMBER")) {
-                    score += 20;
-                }
+            for (String candidateSource : candidateSources) {
+                String compactLine = candidateSource.replace(" ", "");
+                Matcher matcher = PAN_CANDIDATE.matcher(compactLine);
+                while (matcher.find()) {
+                    String candidate = normalisePanCandidate(matcher.group());
+                    if (candidate == null) {
+                        continue;
+                    }
 
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestCandidate = candidate;
+                    int score = 40;
+                    if (containsAny(candidateSource, "PERMANENT ACCOUNT", "ACCOUNT NUMBER", "PAN")) {
+                        score += 30;
+                    }
+                    if (i > 0 && containsAny(lines.get(i - 1), "PERMANENT ACCOUNT", "ACCOUNT NUMBER")) {
+                        score += 20;
+                    }
+
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestCandidate = candidate;
+                    }
                 }
             }
         }
@@ -344,23 +353,38 @@ public class PanExtractor implements DocumentExtractor {
         return secondScore > firstScore ? second : first;
     }
 
+    private void addDistinctNameCandidate(List<String> candidates, String candidate) {
+        if (candidate == null || candidate.isBlank() || candidates.contains(candidate)) {
+            return;
+        }
+        candidates.add(candidate);
+    }
+
     private String cleanPersonName(String raw) {
         if (raw == null || raw.isBlank()) {
             return null;
         }
 
-        String candidate = raw.replaceAll("[^A-Z ]", " ")
+        String[] tokens = raw.replaceAll("[^A-Z0-9 ]", " ")
                 .replaceAll("\\s{2,}", " ")
-                .trim();
-
-        if (candidate.isEmpty()) {
-            return null;
-        }
-
-        String[] tokens = candidate.split("\\s+");
+                .trim()
+                .split("\\s+");
         List<String> cleaned = new ArrayList<>();
 
         for (String token : tokens) {
+            if (token.isBlank()) {
+                continue;
+            }
+            long letters = token.chars().filter(Character::isLetter).count();
+            long digits = token.chars().filter(Character::isDigit).count();
+            if (letters >= 2 && digits <= 2) {
+                token = RegexUtility.normaliseAlphabeticLookalikes(token);
+            }
+            token = token.replaceAll("[^A-Z]", "");
+            if (token.isBlank()) {
+                continue;
+            }
+
             if (NAME_SKIP_WORDS.contains(token)) {
                 break;
             }

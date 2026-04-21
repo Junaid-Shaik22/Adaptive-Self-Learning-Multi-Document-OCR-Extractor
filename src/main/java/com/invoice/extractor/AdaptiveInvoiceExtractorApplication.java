@@ -5,7 +5,7 @@ import org.bytedeco.opencv.opencv_java;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
-@SpringBootApplication(scanBasePackages = {"com.invoice.extractor", "com.docextract"})
+@SpringBootApplication(scanBasePackages = {"com.invoice.extractor", "com.docextract", "com.medical.extractor"})
 public class AdaptiveInvoiceExtractorApplication {
     static {
         Loader.load(opencv_java.class);

@@ -33,7 +33,7 @@ public class RegexUtil {
     );
 
     public static final Pattern INVOICE_NUMBER_TOKEN_PATTERN = Pattern.compile(
-            "^(?=.{3,20}$)(?:\\d{3,12}|(?=.*[A-Za-z])(?=.*\\d)[A-Za-z0-9/-]+)$"
+            "^(?=.{1,20}$)(?:\\d{1,12}|(?=.*[A-Za-z])(?=.*\\d)[A-Za-z0-9/-]+)$"
     );
 
     private RegexUtil() {
@@ -89,7 +89,8 @@ public class RegexUtil {
         }
         String normalized = value.replaceAll("[^A-Za-z0-9]", "").toUpperCase(Locale.ROOT);
         return GSTIN_PATTERN.matcher(normalized).matches()
-                && hasValidGstinStateCode(normalized);
+                && hasValidGstinStateCode(normalized)
+                && (hasGstinChecksum(normalized) || passesGstinShapeValidation(normalized));
     }
 
     public static boolean hasGstinChecksum(String value) {
@@ -115,10 +116,11 @@ public class RegexUtil {
             return normalized;
         }
         String positionalBody = positionalGstinBody(normalized);
+        positionalBody = repairStateCode(positionalBody, normalized) + positionalBody.substring(2);
         String positionalRepair = null;
         if (isAmbiguousTrailingCheckDigit(normalized.charAt(14))) {
             positionalRepair = positionalBody + repairTrailingCheckDigit(normalized.charAt(14));
-            if (isValidGstin(positionalRepair)) {
+            if (passesGstinShapeValidation(positionalRepair)) {
                 return positionalRepair;
             }
         }
@@ -155,7 +157,7 @@ public class RegexUtil {
 
     public static String repairInvoiceNumberCandidate(String token) {
         String normalized = cleanToken(token).toUpperCase(Locale.ROOT);
-        if (normalized.length() < 3 || normalized.length() > 20) {
+        if (normalized.length() < 1 || normalized.length() > 20) {
             return normalized;
         }
         if (normalized.matches("^[IL]\\d{2,11}$")) {
@@ -170,6 +172,9 @@ public class RegexUtil {
         String best = normalized;
         int bestScore = scoreInvoiceVariant(normalized, normalized);
         for (String variant : variants) {
+            if (variant.matches("(?i).*RE[MN][O0QD][VLU]E.*")) {
+                continue;
+            }
             int score = scoreInvoiceVariant(normalized, variant);
             if (score > bestScore) {
                 bestScore = score;
@@ -375,9 +380,19 @@ public class RegexUtil {
         return gstin != null && gstin.length() >= 2 && VALID_GST_STATE_CODES.contains(gstin.substring(0, 2));
     }
 
+    private static boolean passesGstinShapeValidation(String gstin) {
+        return gstin != null
+                && gstin.length() == 15
+                && GSTIN_PATTERN.matcher(gstin).matches()
+                && hasValidGstinStateCode(gstin);
+    }
+
     private static boolean needsGstinRepair(String token) {
         if (token == null || token.length() != 15) {
             return false;
+        }
+        if (!hasValidGstinStateCode(token)) {
+            return true;
         }
         if (!hasValidGstinChecksum(token)) {
             return true;
@@ -386,6 +401,40 @@ public class RegexUtil {
             return "ILOQDSZBTG".indexOf(token.charAt(12)) >= 0;
         }
         return false;
+    }
+
+    private static String repairStateCode(String positionalBody, String source) {
+        String current = positionalBody.substring(0, 2);
+        if (VALID_GST_STATE_CODES.contains(current)) {
+            return current;
+        }
+        String sourceCode = source.substring(0, 2);
+        String best = current;
+        int bestDistance = Integer.MAX_VALUE;
+        for (char first : ocrAlternatives(sourceCode.charAt(0))) {
+            for (char second : ocrAlternatives(sourceCode.charAt(1))) {
+                String candidate = "" + repairToDigit(first) + repairToDigit(second);
+                if (!VALID_GST_STATE_CODES.contains(candidate)) {
+                    continue;
+                }
+                int distance = editDistance(current, candidate);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    best = candidate;
+                }
+            }
+        }
+        if (VALID_GST_STATE_CODES.contains(best)) {
+            return best;
+        }
+        for (String validCode : VALID_GST_STATE_CODES) {
+            int distance = editDistance(current, validCode);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = validCode;
+            }
+        }
+        return best;
     }
 
     private static char computeGstinCheckDigit(String body) {
@@ -451,6 +500,9 @@ public class RegexUtil {
         int score = 0;
         if (candidate.matches("^\\d{3,12}$")) {
             score += 55;
+            if (candidate.length() <= 5) {
+                score += 45;
+            }
         } else if (candidate.matches("^[A-Z]\\d{3,8}$")) {
             score += 120;
         } else if (candidate.matches("^[A-Z]{2,10}\\d{2,8}/\\d{1,8}[A-Z]?$")) {

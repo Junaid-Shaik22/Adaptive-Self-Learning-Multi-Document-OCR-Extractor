@@ -21,6 +21,7 @@ public class ConfidenceCalculator {
         score += formatQualityScore(data);
         score += mathQualityScore(data);
         score -= conflictPenalty(data);
+        score = Math.min(score, qualityCap(data));
 
         return clamp(score, 0.0, 1.0);
     }
@@ -37,7 +38,9 @@ public class ConfidenceCalculator {
             return 1.0;
         }
         double score = 0.0;
-        if (method.contains("keyword")) {
+        if (method.contains("priority")) {
+            score = 0.92;
+        } else if (method.contains("keyword")) {
             score = 0.84;
         } else if (method.contains("regex")) {
             score = 0.66;
@@ -70,6 +73,9 @@ public class ConfidenceCalculator {
         if (looksMeaningfulName(data.getBuyerName(), false)) {
             score += 0.03;
         }
+        if (hasUsefulAddress(data.getBuyerAddress())) {
+            score += 0.02;
+        }
         if (AmountUtil.parseAmount(data.getTotalAmount()) != null) {
             score += 0.04;
         }
@@ -81,6 +87,9 @@ public class ConfidenceCalculator {
         }
         if (data.getLineItems() != null && !data.getLineItems().isEmpty()) {
             score += 0.03;
+        }
+        if (!sameValue(data.getVendorAddress(), data.getBuyerAddress()) && hasUsefulAddress(data.getVendorAddress())) {
+            score += 0.02;
         }
         return score;
     }
@@ -101,10 +110,25 @@ public class ConfidenceCalculator {
     private static double conflictPenalty(InvoiceData data) {
         double penalty = 0.0;
         if (!looksMeaningfulName(data.getVendorName(), true)) {
-            penalty += data.getVendorName() == null ? 0.14 : 0.10;
+            penalty += data.getVendorName() == null ? 0.16 : 0.12;
         }
         if (!RegexUtil.isValidGstin(data.getVendorGstin())) {
-            penalty += data.getVendorGstin() == null ? 0.12 : 0.08;
+            penalty += data.getVendorGstin() == null ? 0.14 : 0.10;
+        }
+        if (!looksMeaningfulName(data.getBuyerName(), false)) {
+            penalty += data.getBuyerName() == null ? 0.20 : 0.16;
+            if (!hasUsefulAddress(data.getBuyerAddress())) {
+                penalty += 0.10;
+            }
+        }
+        if (!RegexUtil.isValidGstin(data.getBuyerGstin())) {
+            penalty += data.getBuyerGstin() == null ? 0.10 : 0.06;
+        }
+        if (data.getBuyerAddress() != null && data.getBuyerAddress().matches(".*\\b(?:po no|purchase order|invoice no|gstin)\\b.*")) {
+            penalty += 0.12;
+        }
+        if (data.getVendorAddress() != null && data.getVendorAddress().matches(".*\\b(?:po no|purchase order|invoice no|gstin)\\b.*")) {
+            penalty += 0.12;
         }
         if (AmountUtil.parseAmount(data.getTotalAmount()) == null) {
             penalty += 0.16;
@@ -118,10 +142,56 @@ public class ConfidenceCalculator {
         if (sameValue(data.getVendorName(), data.getBuyerName())) {
             penalty += 0.08;
         }
-        if (!looksMeaningfulName(data.getBuyerName(), false) && data.getBuyerName() != null) {
-            penalty += 0.08;
+        if (sameValue(data.getVendorAddress(), data.getBuyerAddress())) {
+            penalty += 0.14;
+        }
+        if (AmountUtil.parseAmount(data.getSubTotal()) == null && AmountUtil.parseAmount(data.getTaxAmount()) != null) {
+            penalty += 0.05;
+        }
+        Double subtotal = AmountUtil.parseAmount(data.getSubTotal());
+        Double tax = AmountUtil.parseAmount(data.getTaxAmount());
+        Double total = AmountUtil.parseAmount(data.getTotalAmount());
+        if (subtotal != null && tax != null && total != null && !AmountUtil.approximatelyEquals(subtotal + tax, total)) {
+            penalty += 0.16;
+        }
+        if (total != null && tax != null && total <= tax) {
+            penalty += 0.18;
         }
         return penalty;
+    }
+
+    private static double qualityCap(InvoiceData data) {
+        double cap = 1.0;
+        Double subtotal = AmountUtil.parseAmount(data.getSubTotal());
+        Double tax = AmountUtil.parseAmount(data.getTaxAmount());
+        Double total = AmountUtil.parseAmount(data.getTotalAmount());
+
+        if (!looksValidInvoiceNumber(data.getInvoiceNumber()) || !DateUtil.isValidInvoiceDate(data.getInvoiceDate())) {
+            cap = Math.min(cap, 0.82);
+        }
+        if (!looksMeaningfulName(data.getVendorName(), true) || !RegexUtil.isValidGstin(data.getVendorGstin())) {
+            cap = Math.min(cap, 0.78);
+        }
+        if (!looksMeaningfulName(data.getBuyerName(), false) && !hasUsefulAddress(data.getBuyerAddress())) {
+            cap = Math.min(cap, 0.72);
+        }
+        if (sameValue(data.getVendorAddress(), data.getBuyerAddress())) {
+            cap = Math.min(cap, 0.70);
+        }
+        if (total == null) {
+            cap = Math.min(cap, 0.60);
+        }
+        if (total != null && ((tax != null && total <= tax) || (subtotal != null && total <= subtotal))) {
+            cap = Math.min(cap, 0.65);
+        }
+        if (subtotal != null && tax != null && total != null && !AmountUtil.approximatelyEquals(subtotal + tax, total)) {
+            cap = Math.min(cap, 0.74);
+        }
+        if ((data.getBuyerAddress() != null && data.getBuyerAddress().matches(".*\\b(?:po no|purchase order|invoice no|gstin)\\b.*"))
+                || (data.getVendorAddress() != null && data.getVendorAddress().matches(".*\\b(?:po no|purchase order|invoice no|gstin)\\b.*"))) {
+            cap = Math.min(cap, 0.68);
+        }
+        return cap;
     }
 
     private static boolean looksValidInvoiceNumber(String value) {
@@ -158,6 +228,14 @@ public class ConfidenceCalculator {
 
     private static boolean sameValue(String left, String right) {
         return left != null && right != null && RegexUtil.normalizeForComparison(left).equals(RegexUtil.normalizeForComparison(right));
+    }
+
+    private static boolean hasUsefulAddress(String value) {
+        if (value == null || !value.matches(".*[A-Za-z].*")) {
+            return false;
+        }
+        String lower = value.toLowerCase();
+        return OcrLayoutUtil.isAddressLike(lower) || lower.contains("hyderabad") || lower.contains("road") || lower.matches(".*\\b\\d{6}\\b.*");
     }
 
     private static double clamp(double value, double min, double max) {

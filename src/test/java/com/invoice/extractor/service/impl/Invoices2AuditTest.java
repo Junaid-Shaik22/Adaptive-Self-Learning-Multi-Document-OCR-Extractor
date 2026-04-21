@@ -6,6 +6,7 @@ import com.invoice.extractor.template.JsonTemplateRepository;
 import org.springframework.mock.web.MockMultipartFile;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 import java.io.IOException;
 import java.io.File;
@@ -19,7 +20,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
+@EnabledIfSystemProperty(named = "run.audit.tests", matches = "true")
 public class Invoices2AuditTest {
+    private static final String PDF_PATH_PROPERTY = "audit.pdfPath";
+
     @Test
     void runAuditTest() throws Exception {
         String dpiStr = System.getProperty("audit.dpi", "300");
@@ -28,10 +32,11 @@ public class Invoices2AuditTest {
         runAudit(dpi, resume);
     }
     private static final List<Path> PDF_CANDIDATES = List.of(
+            Path.of("C:\\Users\\S.Junaid\\OneDrive\\Documents\\Dokumen\\invoices2.pdf"),
             Path.of("C:\\Users\\S.Junaid\\Downloads\\invoices2\\invoices2.pdf"),
             Path.of("C:\\Users\\S.Junaid\\OneDrive\\Documents\\Dokumen\\invoices2\\invoices2.pdf")
     );
-    private static final Path AUDIT_DIR = Path.of("target", "audit");
+    private static final Path AUDIT_DIR = Path.of(System.getProperty("audit.outputDir", "target/audit"));
     private static final Path RENDER_DIR = AUDIT_DIR.resolve("rendered");
     private static final Path TEMPLATES_PATH = AUDIT_DIR.resolve("audit-templates.json");
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
@@ -42,7 +47,7 @@ public class Invoices2AuditTest {
             runSinglePage(Integer.parseInt(args[1]), Integer.parseInt(args[2]), args.length > 3 ? Path.of(args[3]) : resolvePdfPath());
             return;
         }
-        int dpi = args.length > 0 ? Integer.parseInt(args[0]) : 150;
+        int dpi = args.length > 0 ? Integer.parseInt(args[0]) : 300;
         boolean resume = args.length > 1 ? Boolean.parseBoolean(args[1]) : true;
         runAudit(dpi, resume);
     }
@@ -295,12 +300,20 @@ public class Invoices2AuditTest {
     }
 
     private static Path resolvePdfPath() throws IOException {
+        String configuredPath = System.getProperty(PDF_PATH_PROPERTY);
+        if (configuredPath != null && !configuredPath.isBlank()) {
+            Path configured = Path.of(configuredPath);
+            if (Files.exists(configured)) {
+                return configured;
+            }
+            throw new IOException("Configured audit PDF path does not exist: " + configured);
+        }
         for (Path candidate : PDF_CANDIDATES) {
             if (Files.exists(candidate)) {
                 return candidate;
             }
         }
-        throw new IOException("Unable to locate invoices2.pdf. Checked: " + PDF_CANDIDATES);
+        throw new IOException("Unable to locate invoices2.pdf. Checked configured property '" + PDF_PATH_PROPERTY + "' and candidates: " + PDF_CANDIDATES);
     }
 
     private static void writeErrorJson(Path output, int page, int dpi, String error, String message) throws IOException {

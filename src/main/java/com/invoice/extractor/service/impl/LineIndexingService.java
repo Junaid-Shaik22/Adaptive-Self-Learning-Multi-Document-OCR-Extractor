@@ -3,19 +3,101 @@ package com.invoice.extractor.service.impl;
 import com.invoice.extractor.util.OcrLayoutUtil;
 import com.invoice.extractor.util.RegexUtil;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 public class LineIndexingService {
+    private static final Pattern COLUMN_BLOCK_PATTERN = Pattern.compile("\\S(?:.*?\\S)?(?=\\s{3,}|$)");
+    private static final int LINE_HEIGHT = 18;
+    private static final int LINE_GAP = 22;
+    private static final int PAGE_Y_OFFSET = 10_000;
+
+    public enum Column {
+        LEFT_COLUMN,
+        RIGHT_COLUMN,
+        FULL_WIDTH
+    }
+
     public static class IndexedLine {
         private final int lineNumber;
         private final String text;
+        private final String originalText;
+        private final int x;
+        private final int y;
+        private final int width;
+        private final int height;
+        private final int pageNumber;
+        private final Column column;
 
         public IndexedLine(int lineNumber, String text) {
-            this.lineNumber = lineNumber;
-            this.text = text;
+            this(lineNumber, text, text, 0, Math.max(0, lineNumber - 1) * LINE_GAP,
+                    text == null ? 0 : Math.max(24, text.length() * 8), LINE_HEIGHT, 1, Column.FULL_WIDTH);
         }
 
-        public int getLineNumber() { return lineNumber; }
-        public String getText() { return text; }
+        public IndexedLine(int lineNumber, String text, int x, int y, int width, int height, int pageNumber) {
+            this(lineNumber, text, text, x, y, width, height, pageNumber, Column.FULL_WIDTH);
+        }
+
+        public IndexedLine(int lineNumber,
+                           String text,
+                           String originalText,
+                           int x,
+                           int y,
+                           int width,
+                           int height,
+                           int pageNumber,
+                           Column column) {
+            this.lineNumber = lineNumber;
+            this.text = text == null ? "" : text;
+            this.originalText = originalText == null ? this.text : originalText;
+            this.x = Math.max(0, x);
+            this.y = Math.max(0, y);
+            this.width = Math.max(0, width);
+            this.height = Math.max(1, height);
+            this.pageNumber = Math.max(1, pageNumber);
+            this.column = column == null ? Column.FULL_WIDTH : column;
+        }
+
+        public int getLineNumber() {
+            return lineNumber;
+        }
+
+        public String getText() {
+            return text;
+        }
+
+        public String getOriginalText() {
+            return originalText;
+        }
+
+        public int getX() {
+            return x;
+        }
+
+        public int getY() {
+            return y;
+        }
+
+        public int getWidth() {
+            return width;
+        }
+
+        public int getHeight() {
+            return height;
+        }
+
+        public int getPageNumber() {
+            return pageNumber;
+        }
+
+        public Column getColumn() {
+            return column;
+        }
     }
 
     public static class Zones {
@@ -107,28 +189,32 @@ public class LineIndexingService {
     }
 
     public static Zones indexLinesAndZones(String ocrText) {
-        String[] lines = ocrText.split("\\n");
-        List<IndexedLine> indexed = new ArrayList<>();
-        for (int i = 0; i < lines.length; i++) {
-            String normalized = RegexUtil.normalizeLine(lines[i]);
-            if (!normalized.isEmpty()) {
-                indexed.add(new IndexedLine(indexed.size() + 1, normalized));
-            }
-        }
+        return indexLinesAndZones(buildIndexedLines(ocrText));
+    }
+
+    public static Zones indexLinesAndZones(List<IndexedLine> indexedLines) {
+        List<IndexedLine> indexed = indexedLines == null ? List.of() : indexedLines;
         Zones zones = new Zones();
         zones.allLines.addAll(indexed);
+        if (indexed.isEmpty()) {
+            zones.setHeaderEndLine(0);
+            zones.setFooterStartLine(1);
+            return zones;
+        }
+
         int tableHeaderIdx = findTableHeaderIndex(indexed);
         int totalIdx = findTotalLineIndex(indexed, tableHeaderIdx);
         int taxIdx = findTaxLineIndex(indexed);
-        int headerSize = computeHeaderSize(indexed.size(), tableHeaderIdx);
-        int footerStartIdx = computeFooterStartIndex(indexed.size(), totalIdx);
+        int headerEndIdx = determineHeaderEndIndex(indexed, tableHeaderIdx);
+        int footerStartIdx = determineFooterStartIndex(indexed, totalIdx);
 
-        for (int i = 0; i < Math.min(headerSize, indexed.size()); i++) {
+        for (int i = 0; i <= headerEndIdx && i < indexed.size(); i++) {
             zones.topZone.add(indexed.get(i));
         }
         for (int i = Math.max(0, footerStartIdx); i < indexed.size(); i++) {
             zones.bottomZone.add(indexed.get(i));
         }
+
         zones.setHeaderEndLine(zones.topZone.isEmpty() ? 0 : zones.topZone.get(zones.topZone.size() - 1).getLineNumber());
         zones.setFooterStartLine(zones.bottomZone.isEmpty() ? indexed.size() + 1 : zones.bottomZone.get(0).getLineNumber());
 
@@ -144,7 +230,7 @@ public class LineIndexingService {
 
         if (tableHeaderIdx != -1) {
             int tableEnd = totalIdx != -1 && totalIdx > tableHeaderIdx ? totalIdx : footerStartIdx;
-            for (int i = tableHeaderIdx + 1; i < tableEnd; i++) {
+            for (int i = tableHeaderIdx + 1; i < tableEnd && i < indexed.size(); i++) {
                 zones.tableZone.add(indexed.get(i));
             }
         }
@@ -153,20 +239,90 @@ public class LineIndexingService {
         return zones;
     }
 
-    private static void buildMiddleZone(List<IndexedLine> indexed, Zones zones, int tableHeaderIdx, int totalIdx, int footerStartIdx) {
+    private static List<IndexedLine> buildIndexedLines(String ocrText) {
+        if (ocrText == null || ocrText.isBlank()) {
+            return List.of();
+        }
+        List<IndexedLine> indexed = new ArrayList<>();
+        String normalizedText = ocrText.replace("\r\n", "\n").replace('\r', '\n');
+        String[] pages = normalizedText.split("\f", -1);
+        int visibleLine = 0;
+
+        for (int pageIndex = 0; pageIndex < pages.length; pageIndex++) {
+            String page = pages[pageIndex];
+            String[] rows = page.split("\n", -1);
+            int visibleRow = 0;
+            for (String row : rows) {
+                String rawLine = row == null ? "" : row.replace('\t', ' ');
+                if (rawLine.trim().isEmpty()) {
+                    continue;
+                }
+                visibleRow++;
+                List<Block> blocks = extractBlocks(rawLine);
+                if (blocks.isEmpty()) {
+                    continue;
+                }
+                Column defaultColumn = blocks.size() > 1 ? Column.LEFT_COLUMN : Column.FULL_WIDTH;
+                for (int blockIndex = 0; blockIndex < blocks.size(); blockIndex++) {
+                    Block block = blocks.get(blockIndex);
+                    visibleLine++;
+                    Column column = blocks.size() == 1
+                            ? Column.FULL_WIDTH
+                            : (blockIndex == 0 ? Column.LEFT_COLUMN : Column.RIGHT_COLUMN);
+                    indexed.add(new IndexedLine(
+                            visibleLine,
+                            block.normalizedText(),
+                            block.normalizedText(),
+                            Math.max(0, block.start() * 8),
+                            ((pageIndex * PAGE_Y_OFFSET) + (visibleRow - 1) * LINE_GAP),
+                            Math.max(24, Math.max(block.normalizedText().length() * 8, (block.end() - block.start()) * 8)),
+                            LINE_HEIGHT,
+                            pageIndex + 1,
+                            column == null ? defaultColumn : column
+                    ));
+                }
+            }
+        }
+        return indexed;
+    }
+
+    private static List<Block> extractBlocks(String rawLine) {
+        List<Block> blocks = new ArrayList<>();
+        Matcher matcher = COLUMN_BLOCK_PATTERN.matcher(rawLine);
+        while (matcher.find()) {
+            String segment = matcher.group();
+            String normalized = RegexUtil.normalizeLine(segment);
+            if (!normalized.isEmpty()) {
+                blocks.add(new Block(normalized, matcher.start(), matcher.end()));
+            }
+        }
+        return blocks;
+    }
+
+    private static void buildMiddleZone(List<IndexedLine> indexed,
+                                        Zones zones,
+                                        int tableHeaderIdx,
+                                        int totalIdx,
+                                        int footerStartIdx) {
         Set<Integer> middleIndexes = new LinkedHashSet<>();
         int upperLimit = tableHeaderIdx >= 0 ? tableHeaderIdx : (totalIdx >= 0 ? totalIdx : footerStartIdx);
 
         for (int i = 0; i < indexed.size(); i++) {
-            String lower = indexed.get(i).getText().toLowerCase(Locale.ROOT);
-            if (isBuyerAnchor(lower)) {
-                for (int j = i; j < Math.min(upperLimit, i + 18); j++) {
-                    String current = indexed.get(j).getText().toLowerCase(Locale.ROOT);
-                    if (j > i && (matchesTableHeader(current) || OcrLayoutUtil.isItemStopLine(current))) {
-                        break;
-                    }
-                    middleIndexes.add(j);
+            IndexedLine anchor = indexed.get(i);
+            String lower = anchor.getText().toLowerCase(Locale.ROOT);
+            if (!isBuyerAnchor(lower)) {
+                continue;
+            }
+            for (int j = i; j < Math.min(upperLimit, i + 18); j++) {
+                IndexedLine current = indexed.get(j);
+                String currentLower = current.getText().toLowerCase(Locale.ROOT);
+                if (j > i && (matchesTableHeader(currentLower) || OcrLayoutUtil.isItemStopLine(currentLower))) {
+                    break;
                 }
+                if (j > i && Math.abs(current.getY() - anchor.getY()) > 220 && current.getColumn() != anchor.getColumn()) {
+                    break;
+                }
+                middleIndexes.add(j);
             }
         }
 
@@ -185,6 +341,37 @@ public class LineIndexingService {
 
     private static boolean isBuyerAnchor(String text) {
         return OcrLayoutUtil.isBuyerSectionHeader(text);
+    }
+
+    private static int determineHeaderEndIndex(List<IndexedLine> indexed, int tableHeaderIdx) {
+        int computed = computeHeaderSize(indexed.size(), tableHeaderIdx) - 1;
+        for (int i = 1; i < indexed.size(); i++) {
+            String lower = indexed.get(i).getText().toLowerCase(Locale.ROOT);
+            if (OcrLayoutUtil.isBuyerSectionHeader(lower)) {
+                computed = Math.min(computed, i);
+                break;
+            }
+            if (matchesTableHeader(lower)) {
+                computed = Math.min(computed, i);
+                break;
+            }
+        }
+        return Math.max(0, Math.min(computed, indexed.size() - 1));
+    }
+
+    private static int determineFooterStartIndex(List<IndexedLine> indexed, int totalIdx) {
+        int start = computeFooterStartIndex(indexed.size(), totalIdx);
+        for (int i = Math.max(0, indexed.size() - 25); i < indexed.size(); i++) {
+            String lower = indexed.get(i).getText().toLowerCase(Locale.ROOT);
+            if (RegexUtil.containsAnyKeyword(lower, List.of(
+                    "grand total", "invoice value", "amount payable", "net amount",
+                    "taxable value", "total tax amount"
+            ))) {
+                start = Math.min(start, i);
+                break;
+            }
+        }
+        return Math.max(0, Math.min(start, indexed.size()));
     }
 
     private static int computeHeaderSize(int totalLines, int tableHeaderIdx) {
@@ -216,12 +403,7 @@ public class LineIndexingService {
                 String next = indexed.get(i + 1).getText().toLowerCase(Locale.ROOT);
                 String combined = current + " " + next;
                 if (matchesTableHeader(combined)) {
-                    if (matchesTableHeader(current)) {
-                        return i;
-                    }
-                    if (matchesTableHeader(next)) {
-                        return i + 1;
-                    }
+                    return matchesTableHeader(current) ? i : i + 1;
                 }
             }
             if (i + 2 < indexed.size()) {
@@ -275,5 +457,8 @@ public class LineIndexingService {
             }
         }
         return -1;
+    }
+
+    private record Block(String normalizedText, int start, int end) {
     }
 }

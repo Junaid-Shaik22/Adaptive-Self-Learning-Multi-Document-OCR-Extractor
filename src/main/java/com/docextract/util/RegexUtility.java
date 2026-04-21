@@ -4,8 +4,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -17,6 +19,30 @@ import java.util.regex.Pattern;
 @Slf4j
 @Component
 public class RegexUtility {
+
+    private static final int[][] VERHOEFF_D = {
+            {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+            {1, 2, 3, 4, 0, 6, 7, 8, 9, 5},
+            {2, 3, 4, 0, 1, 7, 8, 9, 5, 6},
+            {3, 4, 0, 1, 2, 8, 9, 5, 6, 7},
+            {4, 0, 1, 2, 3, 9, 5, 6, 7, 8},
+            {5, 9, 8, 7, 6, 0, 4, 3, 2, 1},
+            {6, 5, 9, 8, 7, 1, 0, 4, 3, 2},
+            {7, 6, 5, 9, 8, 2, 1, 0, 4, 3},
+            {8, 7, 6, 5, 9, 3, 2, 1, 0, 4},
+            {9, 8, 7, 6, 5, 4, 3, 2, 1, 0}
+    };
+
+    private static final int[][] VERHOEFF_P = {
+            {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+            {1, 5, 7, 6, 2, 8, 3, 0, 9, 4},
+            {5, 8, 0, 3, 7, 9, 6, 1, 4, 2},
+            {8, 9, 1, 6, 0, 4, 3, 5, 2, 7},
+            {9, 4, 5, 3, 1, 2, 6, 8, 7, 0},
+            {4, 2, 8, 6, 5, 7, 3, 9, 0, 1},
+            {2, 7, 9, 3, 8, 0, 6, 4, 1, 5},
+            {7, 0, 4, 6, 9, 1, 3, 2, 5, 8}
+    };
 
     // ─────────────────────────────────────────────────
     //  AADHAAR PATTERNS
@@ -59,6 +85,9 @@ public class RegexUtility {
 
     public static final Pattern DATE_FULL =
             Pattern.compile("\\b(\\d{1,2})[/\\-.](\\d{1,2})[/\\-.]((?:19|20)\\d{2})\\b");
+
+    public static final Pattern DATE_FUZZY =
+            Pattern.compile("\\b([0-9OQDILSZBG]{1,2})[/\\-.]([0-9OQDILSZBG]{1,2})[/\\-.]([0-9OQDILSZBG]{4})\\b");
 
     public static final Pattern DATE_YEAR_ONLY =
             Pattern.compile("\\b((?:19|20)\\d{2})\\b");
@@ -176,12 +205,87 @@ public class RegexUtility {
         return digits.substring(0, 4) + " " + digits.substring(4, 8) + " " + digits.substring(8);
     }
 
+    public static boolean isValidAadhaar(String raw) {
+        if (raw == null) {
+            return false;
+        }
+        String digits = normaliseDigitLookalikes(raw).replaceAll("[^0-9]", "");
+        return digits.matches("^[2-9]\\d{11}$") && hasValidVerhoeffChecksum(digits);
+    }
+
+    public static String normaliseDigitLookalikes(String raw) {
+        if (raw == null) {
+            return null;
+        }
+
+        StringBuilder builder = new StringBuilder(raw.length());
+        for (char ch : raw.toUpperCase().toCharArray()) {
+            builder.append(switch (ch) {
+                case 'O', 'Q', 'D' -> '0';
+                case 'I', 'L' -> '1';
+                case 'Z' -> '2';
+                case 'S' -> '5';
+                case 'B' -> '8';
+                case 'G' -> '6';
+                default -> ch;
+            });
+        }
+        return builder.toString();
+    }
+
+    public static String normaliseAlphabeticLookalikes(String raw) {
+        if (raw == null) {
+            return null;
+        }
+
+        StringBuilder builder = new StringBuilder(raw.length());
+        for (char ch : raw.toUpperCase().toCharArray()) {
+            builder.append(switch (ch) {
+                case '0' -> 'O';
+                case '1' -> 'I';
+                case '2' -> 'Z';
+                case '5' -> 'S';
+                case '6' -> 'G';
+                case '8' -> 'B';
+                default -> ch;
+            });
+        }
+        return builder.toString();
+    }
+
+    public static List<String> findDates(String text) {
+        Set<String> results = new LinkedHashSet<>();
+        if (text == null) {
+            return new ArrayList<>();
+        }
+
+        Matcher exact = DATE_FULL.matcher(text.toUpperCase());
+        while (exact.find()) {
+            results.add(normaliseDate(exact.group()));
+        }
+
+        Matcher fuzzy = DATE_FUZZY.matcher(text.toUpperCase());
+        while (fuzzy.find()) {
+            results.add(normaliseDate(fuzzy.group()));
+        }
+
+        results.remove(null);
+        results.remove("");
+        return new ArrayList<>(results);
+    }
+
+    public static String firstDate(String text) {
+        List<String> dates = findDates(text);
+        return dates.isEmpty() ? null : dates.get(0);
+    }
+
     /**
      * Normalise a date to DD/MM/YYYY regardless of separator.
      */
     public static String normaliseDate(String raw) {
         if (raw == null) return null;
-        Matcher m = DATE_FULL.matcher(raw);
+        String candidate = normaliseDigitLookalikes(raw.toUpperCase());
+        Matcher m = DATE_FULL.matcher(candidate);
         if (m.find()) {
             String day = m.group(1);
             if (day.length() == 1) day = "0" + day;
@@ -189,6 +293,15 @@ public class RegexUtility {
             if (month.length() == 1) month = "0" + month;
             return day + "/" + month + "/" + m.group(3);
         }
-        return raw;
+        return candidate.strip();
+    }
+
+    private static boolean hasValidVerhoeffChecksum(String digits) {
+        int checksum = 0;
+        for (int i = 0; i < digits.length(); i++) {
+            int digit = digits.charAt(digits.length() - 1 - i) - '0';
+            checksum = VERHOEFF_D[checksum][VERHOEFF_P[i % 8][digit]];
+        }
+        return checksum == 0;
     }
 }

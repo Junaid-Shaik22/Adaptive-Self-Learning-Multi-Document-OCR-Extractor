@@ -53,6 +53,11 @@ public class VendorExtractor implements FieldExtractor<String> {
             return uppercaseFallback.toResult();
         }
 
+        VendorCandidate voucherPayee = findVoucherPayeeCandidate(zones.allLines);
+        if (voucherPayee != null) {
+            return voucherPayee.toResult();
+        }
+
         return new FieldExtractionResult<>(null, "fallback", null);
     }
 
@@ -77,10 +82,12 @@ public class VendorExtractor implements FieldExtractor<String> {
         }
         String normalizedGstin = vendorGstin.replaceAll("\\s+", "").toUpperCase(Locale.ROOT);
         int gstinIndex = -1;
+        LineIndexingService.IndexedLine gstinLine = null;
         for (int i = 0; i < lines.size(); i++) {
-            String compact = lines.get(i).getText().replaceAll("\\s+", "").toUpperCase(Locale.ROOT);
+            String compact = lines.get(i).getOriginalText().replaceAll("\\s+", "").toUpperCase(Locale.ROOT);
             if (compact.contains(normalizedGstin)) {
                 gstinIndex = i;
+                gstinLine = lines.get(i);
                 break;
             }
         }
@@ -91,6 +98,9 @@ public class VendorExtractor implements FieldExtractor<String> {
         VendorCandidate best = null;
         for (int i = Math.max(0, gstinIndex - 6); i <= Math.min(lines.size() - 1, gstinIndex + 1); i++) {
             if (i == gstinIndex) {
+                continue;
+            }
+            if (gstinLine != null && !sameColumn(gstinLine, lines.get(i))) {
                 continue;
             }
             String lower = lines.get(i).getText().toLowerCase(Locale.ROOT);
@@ -134,6 +144,26 @@ public class VendorExtractor implements FieldExtractor<String> {
             }
         }
         return best;
+    }
+
+    private VendorCandidate findVoucherPayeeCandidate(List<LineIndexingService.IndexedLine> lines) {
+        if (lines == null) {
+            return null;
+        }
+        for (LineIndexingService.IndexedLine line : lines) {
+            String text = RegexUtil.normalizeLine(line.getText());
+            if (!text.toLowerCase(Locale.ROOT).startsWith("to ")) {
+                continue;
+            }
+            String candidateText = sanitizeCandidate(text.substring(3));
+            if (!isValidScoredCandidate(candidateText, false)) {
+                continue;
+            }
+            VendorCandidate candidate = new VendorCandidate(candidateText, "fallback", line.getLineNumber());
+            candidate.score = 88;
+            return candidate;
+        }
+        return null;
     }
 
     private VendorCandidate buildScoredCandidate(String rawValue,
@@ -217,8 +247,10 @@ public class VendorExtractor implements FieldExtractor<String> {
         score += OcrLayoutUtil.looksLikeMeaningfulUppercaseLine(text) ? 16 : 0;
         score += RegexUtil.containsAnyKeyword(lower, VENDOR_LABEL_KEYWORDS) ? 18 : 0;
         score += lower.startsWith("m/s") ? 8 : 0;
+        score += line.getColumn() == LineIndexingService.Column.LEFT_COLUMN ? 10 : 0;
+        score += line.getColumn() == LineIndexingService.Column.RIGHT_COLUMN && !proximityMode ? -16 : 0;
         if (RegexUtil.isValidGstin(vendorGstin)
-                && line.getText().replaceAll("\\s+", "").toUpperCase(Locale.ROOT).contains(vendorGstin.toUpperCase(Locale.ROOT))) {
+                && line.getOriginalText().replaceAll("\\s+", "").toUpperCase(Locale.ROOT).contains(vendorGstin.toUpperCase(Locale.ROOT))) {
             score += 24;
         }
         if (proximityMode) {
@@ -279,6 +311,7 @@ public class VendorExtractor implements FieldExtractor<String> {
         normalized = normalized.replaceFirst("(?i)^\\(?\\s*(?:tax\\s+invoice|invoice|e-?invoice|voucher)\\s*\\)?\\s*", "");
         normalized = normalized.replaceAll("(?i)^(?:original|duplicate|triplicate|extra)\\s+for\\s+[A-Za-z/ ]+", "").trim();
         normalized = normalized.replaceFirst("(?i)^.*?\\b(?:m/s\\.?|seller|supplier|vendor|from|for)\\b\\s*[:#-]*\\s*", "");
+        normalized = normalized.replaceFirst("^[a-z]{2,16}\\s+(?=[A-Z][A-Za-z&().-]+\\s+[A-Z].*\\b(?:ltd|limited|pvt|private|llp|industries|corporation|engineering|electronics|systems|solutions|chemicals)\\b)", "");
         normalized = OcrLayoutUtil.truncateAtKeyword(normalized, OcrLayoutUtil.HEADER_METADATA_KEYWORDS);
         normalized = OcrLayoutUtil.truncateAtKeyword(normalized, OcrLayoutUtil.BUYER_STOP_KEYWORDS);
         normalized = normalized.replaceAll("(?i)^tax invoice\\s*", "").trim();
@@ -287,18 +320,19 @@ public class VendorExtractor implements FieldExtractor<String> {
         normalized = normalized.replaceFirst("(?i)\\b(?:invoice\\s*no|invoice\\s*number|dated|date|ref\\.?\\s*no|order\\s*no)\\b.*$", "").trim();
         normalized = normalized.replaceFirst("(?i)^\\(?page\\s*\\d+\\)?$", "").trim();
         normalized = normalized.replaceFirst("\\s*[-:|]+\\s*$", "").trim();
-
         String lower = normalized.toLowerCase(Locale.ROOT);
         int suffixIndex = lastCompanySuffixIndex(lower);
         if (suffixIndex >= 0) {
             String tail = normalized.substring(suffixIndex);
-            if (!tail.matches("(?i).*(?:\\(\\d{4}[-/]\\d{2,4}\\)|\\b(?:ltd|limited|pvt|llp|industries|corporation|systems|solutions)\\b).*")) {
+            if (!tail.matches("(?i).*(?:\\(\\d{4}[-/]\\d{2,4}\\)|\\b(?:ltd|limited|pvt|private|llp|industries|corporation|systems|solutions|company|agency|traders|associates|co)\\b).*")) {
                 normalized = normalized.substring(0, suffixIndex).trim();
             } else if (normalized.matches(".*\\b(?:ltd|limited|pvt|llp)\\b\\s+[A-Za-z]{2,20}.*")) {
                 normalized = normalized.replaceFirst("(?i)(\\b(?:ltd|limited|llp)\\b).*$", "$1").trim();
             }
         }
         normalized = normalized.replaceFirst("\\s*[-–]\\s*\\(\\d{4}[-/]\\d{2,4}\\)\\s*$", "").trim();
+        // Also strip year suffix without preceding dash: "Ranco Industries (2022-2023)"
+        normalized = normalized.replaceFirst("\\s*\\(\\d{4}[-/]\\d{2,4}\\)\\s*$", "").trim();
         normalized = normalized.replaceAll("\\s{2,}", " ").trim();
         return normalized.replaceAll("\\s+[a-z]{1,3}$", "").trim();
     }
@@ -380,6 +414,15 @@ public class VendorExtractor implements FieldExtractor<String> {
             return true;
         }
         return addressHits >= 1 && (text.contains(",") || text.matches(".*\\d.*"));
+    }
+
+    private boolean sameColumn(LineIndexingService.IndexedLine anchor, LineIndexingService.IndexedLine candidate) {
+        if (anchor == null || candidate == null) {
+            return false;
+        }
+        return anchor.getColumn() == LineIndexingService.Column.FULL_WIDTH
+                || candidate.getColumn() == LineIndexingService.Column.FULL_WIDTH
+                || anchor.getColumn() == candidate.getColumn();
     }
 
     private static class VendorCandidate {

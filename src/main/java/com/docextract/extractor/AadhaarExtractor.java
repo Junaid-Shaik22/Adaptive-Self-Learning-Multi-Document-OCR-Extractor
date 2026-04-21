@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -39,16 +40,19 @@ public class AadhaarExtractor implements DocumentExtractor {
 
     // ─── Additional patterns specific to Aadhaar ──────────────────────────────
     private static final Pattern AADHAAR_LABELLED_PATTERN = Pattern.compile(
-            "(?:YOUR\\s+AADHAAR\\s+NO|AADHAAR\\s+NO|AADHAAR\\s+NUMBER)[:\\s-]*([2-9]\\d{3}\\s?\\d{4}\\s?\\d{4})");
+            "(?:YOUR\\s+AADHAAR\\s+NO|AADHAAR\\s+NO|AADHAAR\\s+NUMBER)[:\\s-]*([A-Z0-9]{4}\\s?[A-Z0-9]{4}\\s?[A-Z0-9]{4})");
+
+    private static final Pattern AADHAAR_FUZZY_PATTERN = Pattern.compile(
+            "\\b([A-Z0-9]{4}\\s?[A-Z0-9]{4}\\s?[A-Z0-9]{4})\\b");
 
     private static final Pattern DOB_LABEL_PATTERN = Pattern.compile(
-            "(?:DOB|DATE OF BIRTH|D\\.O\\.B|B4/DOB|BA/DOB|B4DOB|BADOB)[:\\s-]*([0-9]{2}[/\\-.][0-9]{2}[/\\-.][0-9]{4})");
+            "(?:(?:DOB|DATE OF BIRTH|D\\.O\\.B)|(?:[A-Z0-9]{1,3}/DOB)|(?:[A-Z0-9]{1,3}DOB))[:\\s-]*([0-9OQDILSZBG]{1,2}[/\\-.][0-9OQDILSZBG]{1,2}[/\\-.][0-9OQDILSZBG]{4})");
 
     private static final Pattern YEAR_OF_BIRTH_PATTERN =
             Pattern.compile("YEAR OF BIRTH[:\\s-]*(\\d{4})");
 
     private static final Pattern RELATION_PATTERN =
-            Pattern.compile("\\b(?:S/O|D/O|W/O|C/O)\\b");
+            Pattern.compile("\\b(?:S[/\\s]O|D[/\\s]O|W[/\\s]O|C[/\\s]O)\\b");
 
     private static final Pattern HOUSE_PATTERN = Pattern.compile(
             "\\b\\d+[A-Z]?(?:[-/]\\d+[A-Z]?)+(?:[/\\-]\\d+)?\\b|\\b(?:HOUSE|FLAT|PLOT|DOOR)\\b");
@@ -66,7 +70,8 @@ public class AadhaarExtractor implements DocumentExtractor {
             "S/O", "D/O", "W/O", "C/O", "HOUSE", "FLAT", "PLOT", "DOOR",
             "ROAD", "STREET", "LANE", "NAGAR", "COLONY", "VILLAGE",
             "MANDAL", "DIST", "DISTRICT", "STATE", "TEMPLE", "HYDERABAD",
-            "AMBERPET", "PATEL", "TELANGANA", "ANDHRA", "PRADESH", "PIN"
+            "AMBERPET", "PATEL", "TELANGANA", "ANDHRA", "PRADESH", "PIN",
+            "ADDRESS", "ADDR"
     );
 
     private static final Set<String> ADDRESS_STOP_MARKERS = Set.of(
@@ -79,7 +84,7 @@ public class AadhaarExtractor implements DocumentExtractor {
     private static final Set<String> COMMON_NAME_WORDS = Set.of(
             "MOHD", "MD", "MOHAMMAD", "MOHAMMED", "SHAIK", "SHEIKH",
             "SHAIKH", "BEGUM", "BANO", "KUMAR", "DEVI", "SINGH", "KHAN",
-            "ALI", "VALI", "AHMED", "HUSSAIN"
+            "ALI", "VALI", "AHMED", "HUSSAIN", "JUNAID"
     );
 
     @Override
@@ -146,6 +151,7 @@ public class AadhaarExtractor implements DocumentExtractor {
         if (line == null || line.isBlank()) return false;
         if (line.length() < 4 || line.length() > 60)  return false;
         if (!line.matches("[A-Z][A-Z .]*")) return false;  // only letters and spaces/dots
+        if (containsGarbledNameToken(line)) return false;
         if (line.contains("INDIA") || line.contains("AADHAAR") ||
             line.contains("UIDAI") || line.contains("GOVERNMENT") ||
             line.contains("AUTHORITY") || line.contains("IDENTIFICATION") ||
@@ -174,36 +180,128 @@ public class AadhaarExtractor implements DocumentExtractor {
     private String extractAadhaarNumber(List<String> lines, String cleanedText) {
         Matcher labelledMatcher = AADHAAR_LABELLED_PATTERN.matcher(cleanedText);
         if (labelledMatcher.find()) {
-            return RegexUtility.formatAadhaar(labelledMatcher.group(1));
+            String labelled = normaliseAadhaarCandidate(labelledMatcher.group(1));
+            if (labelled != null) {
+                return labelled;
+            }
         }
 
+        Map<String, Integer> candidateScores = new LinkedHashMap<>();
+
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            String previous = i > 0 ? lines.get(i - 1) : "";
+            String next = i + 1 < lines.size() ? lines.get(i + 1) : "";
+
+            List<String> candidateSources = new ArrayList<>();
+            candidateSources.add(line);
+            if (containsAadhaarLabel(line) && i + 1 < lines.size()) {
+                candidateSources.add(line + " " + next);
+            }
+            if (containsAadhaarLabel(previous)) {
+                candidateSources.add(previous + " " + line);
+            }
+
+            for (String candidateSource : candidateSources) {
+                boolean labelledContext = containsAadhaarLabel(candidateSource) || containsAadhaarLabel(previous);
+                boolean vidContext = containsAny(candidateSource, "VID")
+                        || containsAny(previous, "VID")
+                        || containsAny(next, "VID");
+                boolean enrolmentContext = containsAny(candidateSource, "ENROLMENT", "ENROLLMENT")
+                        || containsAny(previous, "ENROLMENT", "ENROLLMENT");
+
+                for (String candidate : collectAadhaarCandidates(candidateSource)) {
+                    String formatted = normaliseAadhaarCandidate(candidate);
+                    if (formatted == null) {
+                        continue;
+                    }
+
+                    int score = 40;
+                    if (labelledContext) {
+                        score += 180;
+                    }
+                    if (containsAadhaarLabel(line)) {
+                        score += 70;
+                    }
+                    if (containsAadhaarLabel(previous)) {
+                        score += 110;
+                    }
+                    if (candidate.matches(".*\\s+.*")) {
+                        score += 10;
+                    }
+                    if (i + 1 < lines.size() && containsAny(next, "VID")) {
+                        score += 15;
+                    }
+                    if (vidContext) {
+                        score -= 260;
+                    }
+                    if (enrolmentContext) {
+                        score -= 120;
+                    }
+
+                    Integer existingScore = candidateScores.get(formatted);
+                    candidateScores.put(formatted, existingScore == null ? score : existingScore + score);
+                }
+            }
+        }
+
+        return candidateScores.entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .orElse(null);
+    }
+
+    private String extractDob(List<String> lines, String cleanedText) {
         String bestCandidate = null;
         int bestScore = Integer.MIN_VALUE;
 
         for (int i = 0; i < lines.size(); i++) {
             String line = lines.get(i);
-            for (String candidate : RegexUtility.findAll(RegexUtility.AADHAAR_NUMBER, line)) {
-                String digits = candidate.replaceAll("\\s", "");
-                if (!digits.matches("^[2-9]\\d{11}$")) {
-                    continue;
-                }
+            List<String> candidates = new ArrayList<>();
+            boolean dobLabel = containsDobLabel(line);
 
-                int score = digits.length();
-                if (containsAny(line, "YOUR AADHAAR NO", "AADHAAR NO", "AADHAAR NUMBER")) {
-                    score += 120;
+            Matcher labelledMatcher = DOB_LABEL_PATTERN.matcher(line);
+            while (labelledMatcher.find()) {
+                candidates.add(labelledMatcher.group(1));
+            }
+
+            if (dobLabel || containsAny(line, "YEAR OF BIRTH")) {
+                candidates.addAll(RegexUtility.findDates(line));
+                if (i + 1 < lines.size()) {
+                    candidates.addAll(RegexUtility.findDates(lines.get(i + 1)));
                 }
-                if (containsAny(line, "VID")) {
-                    score -= 200;
+                Matcher yearMatcher = YEAR_OF_BIRTH_PATTERN.matcher(line);
+                if (yearMatcher.find()) {
+                    candidates.add(yearMatcher.group(1));
                 }
-                if (i > 0 && containsAny(lines.get(i - 1), "YOUR AADHAAR NO", "AADHAAR NO")) {
-                    score += 90;
+            } else {
+                candidates.addAll(RegexUtility.findDates(line));
+            }
+
+            for (String rawCandidate : candidates) {
+                String candidate = rawCandidate.contains("/") || rawCandidate.contains("-") || rawCandidate.contains(".")
+                        ? RegexUtility.normaliseDate(rawCandidate)
+                        : rawCandidate;
+                int score = dobLabel ? 140 : 20;
+                if (containsAny(line, "YEAR OF BIRTH")) {
+                    score += 30;
                 }
-                if (i + 1 < lines.size() && containsAny(lines.get(i + 1), "VID")) {
-                    score += 20;
+                if ((i > 0 && containsAny(lines.get(i - 1), "MALE", "FEMALE", "TRANSGENDER"))
+                        || (i + 1 < lines.size() && containsAny(lines.get(i + 1), "MALE", "FEMALE", "TRANSGENDER"))) {
+                    score += 40;
                 }
-                if (containsAny(line, "ENROLMENT", "ENROLLMENT")) {
-                    score -= 40;
+                if ((i > 0 && looksLikeIdentityNameContext(lines.get(i - 1), candidate))
+                        || (i + 1 < lines.size() && looksLikeIdentityNameContext(lines.get(i + 1), candidate))) {
+                    score += 25;
                 }
+                if (containsDateNoise(line)) {
+                    score -= 220;
+                }
+                if (!dobLabel && ((i > 0 && containsDateNoise(lines.get(i - 1)))
+                        || (i + 1 < lines.size() && containsDateNoise(lines.get(i + 1))))) {
+                    score -= 80;
+                }
+                score += birthDateScore(candidate);
 
                 if (score > bestScore) {
                     bestScore = score;
@@ -212,87 +310,14 @@ public class AadhaarExtractor implements DocumentExtractor {
             }
         }
 
-        return bestCandidate != null ? RegexUtility.formatAadhaar(bestCandidate) : null;
-    }
-
-    private String extractDob(List<String> lines, String cleanedText) {
-        Matcher directMatcher = DOB_LABEL_PATTERN.matcher(cleanedText);
-        if (directMatcher.find()) {
-            return RegexUtility.normaliseDate(directMatcher.group(1));
-        }
-
-        String bestCandidate = null;
-        int bestScore = Integer.MIN_VALUE;
-
-        for (int i = 0; i < lines.size(); i++) {
-            String line = lines.get(i);
-            String candidate = null;
-            int score = 0;
-
-            Matcher labelledMatcher = DOB_LABEL_PATTERN.matcher(line);
-            if (labelledMatcher.find()) {
-                candidate = labelledMatcher.group(1);
-                score += 120;
-            }
-
-            if (candidate == null && containsAny(line, "DOB", "DATE OF BIRTH", "B4/DOB", "BA/DOB")) {
-                candidate = firstDate(line);
-                if (candidate != null) {
-                    score += 90;
-                } else if (i + 1 < lines.size()) {
-                    candidate = firstDate(lines.get(i + 1));
-                    if (candidate != null) {
-                        score += 80;
-                    }
-                }
-            }
-
-            if (candidate == null) {
-                candidate = firstDate(line);
-                if (candidate != null) {
-                    score += 20;
-                }
-            }
-
-            if (candidate == null) {
-                Matcher yearMatcher = YEAR_OF_BIRTH_PATTERN.matcher(line);
-                if (yearMatcher.find()) {
-                    candidate = yearMatcher.group(1);
-                    score += 30;
-                }
-            }
-
-            if (candidate == null) {
-                continue;
-            }
-
-            if (containsAny(line, "MALE", "FEMALE", "TRANSGENDER")) {
-                score += 15;
-            }
-            if ((i > 0 && containsAny(lines.get(i - 1), "MALE", "FEMALE", "TRANSGENDER"))
-                    || (i + 1 < lines.size() && containsAny(lines.get(i + 1), "MALE", "FEMALE", "TRANSGENDER"))) {
-                score += 15;
-            }
-            if (containsAny(line, "VID", "ENROLMENT", "ENROLLMENT")) {
-                score -= 40;
-            }
-
-            if (score > bestScore) {
-                bestScore = score;
-                bestCandidate = candidate;
-            }
-        }
-
-        return bestCandidate != null && bestCandidate.contains("/")
-                ? RegexUtility.normaliseDate(bestCandidate)
-                : bestCandidate;
+        return bestCandidate;
     }
 
     private String extractName(List<String> lines, String dob, String gender) {
         Map<String, Integer> candidates = new LinkedHashMap<>();
 
         for (int i = 0; i < lines.size(); i++) {
-            String line = lines.get(i);
+            String line = normalisePotentialNameLine(lines.get(i));
 
             if (containsAny(line, "DOB", "DATE OF BIRTH", "YEAR OF BIRTH", "MALE", "FEMALE", "TRANSGENDER")) {
                 addNameCandidate(candidates, previousNameFragment(lines, i - 1, dob, gender), 85);
@@ -328,7 +353,9 @@ public class AadhaarExtractor implements DocumentExtractor {
 
         if (start < 0) {
             for (int i = 0; i < lines.size(); i++) {
-                if (isAddressLine(lines.get(i))) {
+                if (lines.get(i).startsWith("ADDRESS")
+                        || lines.get(i).startsWith("ADDR")
+                        || isAddressLine(lines.get(i))) {
                     start = i;
                     break;
                 }
@@ -385,6 +412,9 @@ public class AadhaarExtractor implements DocumentExtractor {
     private int scoreNameLine(String line, int index, List<String> lines) {
         int score = 30;
         String[] tokens = line.replaceAll("[^A-Z ]", " ").trim().split("\\s+");
+        if (containsGarbledNameToken(line)) {
+            score -= 35;
+        }
         score += tokens.length == 3 ? 18 : 12;
 
         if (index + 1 < lines.size() && containsAny(lines.get(index + 1), "DOB", "DATE OF BIRTH", "MALE", "FEMALE", "TRANSGENDER")) {
@@ -408,7 +438,7 @@ public class AadhaarExtractor implements DocumentExtractor {
 
     private String previousNameFragment(List<String> lines, int startIndex, String dob, String gender) {
         for (int i = startIndex; i >= 0; i--) {
-            String candidate = lines.get(i);
+            String candidate = normalisePotentialNameLine(lines.get(i));
             if (isLikelyNameLine(candidate, dob, gender)) {
                 return candidate;
             }
@@ -440,10 +470,11 @@ public class AadhaarExtractor implements DocumentExtractor {
     }
 
     private void addNameCandidate(Map<String, Integer> candidates, String value, int score) {
-        if (value == null || value.isBlank()) {
+        String normalized = trimNameNoiseTokens(value);
+        if (normalized == null || normalized.isBlank()) {
             return;
         }
-        candidates.merge(value, score, (oldV, newV) -> Math.max(oldV, newV));
+        candidates.merge(normalized, score, (oldV, newV) -> Math.max(oldV, newV));
     }
 
     private boolean isAddressLine(String line) {
@@ -485,13 +516,24 @@ public class AadhaarExtractor implements DocumentExtractor {
     private String cleanAddressLine(String line) {
         String cleaned = line.replaceFirst("^TO\\s*:?\\s*", "")
                 .replaceFirst("^ADDRESS\\s*:?\\s*", "")
+                .replaceFirst("^ADDR\\s*:?\\s*", "")
                 .replaceAll("\\bG\\s+(S/O|D/O|W/O|C/O)\\b", "$1")
-                .replaceFirst("^[A-Z0-9][\\s.:-]*(?=(?:\\(?\\d|[A-Z]{3,}))", "")
+                .replaceFirst("^(?:[A-Z]{1,3}|\\d{1,3})[).:-]\\s+(?=(?:S/O|D/O|W/O|C/O|\\d|[A-Z]{3,}))", "")
+                .replaceFirst("^(?:[A-Z0-9&$]{1,2})\\s+(?=(?:S/O|D/O|W/O|C/O|[A-Z]{4,}|\\d))", "")
+                .replaceAll("(?i)\\b(?:YOUR AADHAAR NO|AADHAAR NO|AADHAAR NUMBER|VID)\\b.*$", "")
                 .replaceAll("^[,;:.()\\s-]+", "")
                 .replaceAll("\\s+,", ",")
                 .replaceAll(",{2,}", ",")
                 .replaceAll("\\s{2,}", " ")
                 .trim();
+
+        Matcher houseMatcher = HOUSE_PATTERN.matcher(cleaned);
+        if (houseMatcher.find() && houseMatcher.start() > 0) {
+            String prefix = cleaned.substring(0, houseMatcher.start()).replaceAll("[^A-Z0-9]", "");
+            if (prefix.length() <= 2) {
+                cleaned = cleaned.substring(houseMatcher.start()).trim();
+            }
+        }
 
         Matcher pinMatcher = RegexUtility.PIN_CODE.matcher(cleaned);
         if (pinMatcher.find()) {
@@ -523,7 +565,53 @@ public class AadhaarExtractor implements DocumentExtractor {
                 tokens[i] = replacement;
             }
         }
-        return String.join(" ", tokens);
+        return trimNameNoiseTokens(String.join(" ", tokens));
+    }
+
+    private String normalisePotentialNameLine(String rawLine) {
+        if (rawLine == null || rawLine.isBlank()) {
+            return rawLine;
+        }
+
+        String[] rawTokens = rawLine.replaceAll("[^A-Z0-9. ]", " ").split("\\s+");
+        List<String> cleanedTokens = new ArrayList<>();
+        for (String token : rawTokens) {
+            if (token.isBlank()) {
+                continue;
+            }
+            long letters = token.chars().filter(Character::isLetter).count();
+            long digits = token.chars().filter(Character::isDigit).count();
+            if (letters >= 2 && digits <= 2) {
+                token = RegexUtility.normaliseAlphabeticLookalikes(token);
+            }
+            cleanedTokens.add(token);
+        }
+
+        return trimNameNoiseTokens(String.join(" ", cleanedTokens).replaceAll("\\s{2,}", " ").trim());
+    }
+
+    private String trimNameNoiseTokens(String value) {
+        if (value == null || value.isBlank()) {
+            return value;
+        }
+
+        List<String> tokens = new ArrayList<>(List.of(value.split("\\s+")));
+        while (!tokens.isEmpty() && isDisposableNameEdgeToken(tokens.get(0))) {
+            tokens.remove(0);
+        }
+        while (!tokens.isEmpty() && isDisposableNameEdgeToken(tokens.get(tokens.size() - 1))) {
+            tokens.remove(tokens.size() - 1);
+        }
+        return String.join(" ", tokens).replaceAll("\\s{2,}", " ").trim();
+    }
+
+    private boolean isDisposableNameEdgeToken(String token) {
+        if (token == null || token.isBlank()) {
+            return true;
+        }
+        return NAME_STOP_WORDS.contains(token)
+                || token.matches("(?:[A-Z0-9]{1,3}/)?DOB")
+                || token.matches("DOB[:.]?");
     }
 
     private String normaliseCommonNameToken(String token) {
@@ -596,9 +684,24 @@ public class AadhaarExtractor implements DocumentExtractor {
         return distance[left.length()][right.length()];
     }
 
-    private String firstDate(String text) {
-        Matcher matcher = RegexUtility.DATE_FULL.matcher(text);
-        return matcher.find() ? matcher.group() : null;
+    private List<String> collectAadhaarCandidates(String text) {
+        List<String> candidates = new ArrayList<>(RegexUtility.findAll(RegexUtility.AADHAAR_NUMBER, text));
+        Matcher fuzzyMatcher = AADHAAR_FUZZY_PATTERN.matcher(text);
+        while (fuzzyMatcher.find()) {
+            candidates.add(fuzzyMatcher.group(1));
+        }
+        return candidates;
+    }
+
+    private String normaliseAadhaarCandidate(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String digits = RegexUtility.normaliseDigitLookalikes(raw).replaceAll("[^0-9]", "");
+        if (!RegexUtility.isValidAadhaar(digits)) {
+            return null;
+        }
+        return RegexUtility.formatAadhaar(digits);
     }
 
     private boolean containsAny(String text, String... values) {
@@ -621,5 +724,54 @@ public class AadhaarExtractor implements DocumentExtractor {
         if (pct >= 80) return "HIGH";
         if (pct >= 50) return "MEDIUM";
         return "LOW";
+    }
+
+    private boolean containsAadhaarLabel(String text) {
+        return containsAny(text, "YOUR AADHAAR NO", "AADHAAR NO", "AADHAAR NUMBER");
+    }
+
+    private boolean containsDobLabel(String text) {
+        return containsAny(text, "DOB", "DATE OF BIRTH", "YEAR OF BIRTH")
+                || text.matches(".*\\b[A-Z0-9]{1,3}/DOB\\b.*")
+                || text.matches(".*\\b[A-Z0-9]{1,3}DOB\\b.*");
+    }
+
+    private boolean containsDateNoise(String text) {
+        return containsAny(text, "ISSUE DATE", "DOWNLOAD DATE", "ENROLMENT", "ENROLLMENT", "VID");
+    }
+
+    private boolean looksLikeIdentityNameContext(String line, String candidateDate) {
+        String candidate = normalisePotentialNameLine(line);
+        return candidate != null
+                && !candidate.contains(candidateDate)
+                && isLikelyNameLine(candidate, candidateDate, null);
+    }
+
+    private int birthDateScore(String candidate) {
+        if (candidate == null || !candidate.matches("\\d{2}/\\d{2}/\\d{4}")) {
+            return 0;
+        }
+        int year = Integer.parseInt(candidate.substring(6));
+        int currentYear = LocalDate.now().getYear();
+        if (year > currentYear) {
+            return -100;
+        }
+        if (year < 1900) {
+            return -40;
+        }
+        return 10;
+    }
+
+    private boolean containsGarbledNameToken(String line) {
+        for (String token : line.split("\\s+")) {
+            if (token.length() >= 5 && !COMMON_NAME_WORDS.contains(token) && token.chars().noneMatch(this::isVowel)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isVowel(int value) {
+        return "AEIOU".indexOf(value) >= 0;
     }
 }
