@@ -114,14 +114,63 @@ Confidence Score → JSON Output
   "invoiceDate": "20-Jan-24",
   "vendorName": "Ranco Industries",
   "vendorGstin": "24AAEFR7351M1ZW",
-  "buyerName": "NFC KOTA",
+  "buyerName": "Department of Atomic Energy- KOTA, Directorate Of Purchase And Stores",
   "buyerGstin": "08AAAGN1030Q1Z8",
+
+  "poNumber": "NOT_MENTIONED",
+  "poDate": "NOT_MENTIONED",
+  "orderReference": "NOT_MENTIONED",
+  "deliveryNote": "NOT_MENTIONED",
+
+  "dispatchThrough": "By Aman Roadlines Kota",
+  "transporterName": "Aman Roadlines",
+  "transportDetails": "NFC KOTA PLANT SITE, RAWATBHATTA",
+  "vehicleNumber": "NOT_MENTIONED",
+  "destination": "RAWATBHATTA",
+  "placeOfSupply": "Rajasthan",
+
+  "paymentTerms": "NOT_MENTIONED",
+
+  "bankName": "State Bank of India",
+  "accountNumber": "56007241003",
+  "ifscCode": "SBIN0063762",
+  "branch": "NOT_MENTIONED",
+
+  "irn": "NOT_MENTIONED",
+  "ackNumber": "NOT_MENTIONED",
+  "ewayBill": "NOT_MENTIONED",
+
+  "vendorPhone": "9619377072, 9825083030",
+  "vendorEmail": "NOT_MENTIONED",
+  "vendorWebsite": "NOT_MENTIONED",
+
+  "vendorAddress": "S. No-150, Plot No-3A, Sihor Ghangali Rd",
+  "buyerAddress": "Department of Atomic Energy- KOTA, Directorate Of Purchase And Stores",
+
+  "vendorPAN": "AAEFR7351M",
+  "vendorCIN": "NOT_MENTIONED",
+  "msmeNumber": "NOT_MENTIONED",
+
+  "state": "Rajasthan",
+  "stateCode": "08",
+  "pincode": "364240",
+
   "subTotal": "260680.51",
+  "taxableValue": "260680.51",
+
+  "cgst": "NOT_MENTIONED",
+  "sgst": "NOT_MENTIONED",
+  "igst": "NOT_MENTIONED",
+
   "taxAmount": "46922.49",
+  "roundOff": "NOT_MENTIONED",
+
   "totalAmount": "307603.00",
   "currency": "INR",
+
   "lineItems": [],
-  "confidenceScore": 0.85
+
+  "confidenceScore": 0.92
 }
 ```
 
