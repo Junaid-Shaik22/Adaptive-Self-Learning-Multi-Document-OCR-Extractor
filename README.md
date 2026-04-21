@@ -1,128 +1,184 @@
-### Multi-Document Intelligent OCR Extraction Engine
+# 🚀 Multi-Document Intelligent OCR Extraction Engine
 
-A production-ready **Java 17 Spring Boot REST API** for extracting structured data from multiple document types such as **Invoices, Aadhaar, PAN, and Driving License** using advanced OCR, zone-based extraction, and self-learning template logic.
-
----
-
-##  Features
-
-###  Multi-Document Support
-
-* Supports:
-
-  * 🧾 Invoice Extraction (Adaptive & Template-based)
-  * 🪪 Aadhaar OCR Extraction
-  * 🆔 PAN Card Extraction
-  * 🚗 Driving License Extraction
-* Automatic document type detection using intelligent classification
-
-###  OCR & Preprocessing
-
-* Advanced OCR using Tesseract (Tess4J)
-* Image preprocessing:
-
-  * Grayscale conversion
-  * Adaptive thresholding
-  * Noise removal
-  * Deskew correction
-  * DPI enhancement
-  * Border removal
-
-###  Intelligent Extraction Engine
-
-* Zone-based document understanding (Top / Middle / Bottom)
-* Multi-strategy field extraction:
-
-  * Keyword-based
-  * Regex-based
-  * Positional extraction
-* Field validation logic for high accuracy
-
-###  Invoice-Specific Intelligence
-
-* Self-learning template system (no code generation)
-* Template reuse for repeated invoice formats
-* Extraction of:
-
-  * Invoice Number & Date
-  * Vendor & Buyer details
-  * GSTIN (validated)
-  * Subtotal, Tax, Total
-  * Line items
-
-###  Aadhaar-Specific Extraction
-
-* Name extraction
-* Aadhaar number (masked)
-* Date of Birth
-* Gender detection
-* Address & Pincode extraction
-
-###  Scalable Architecture
-
-* Factory Design Pattern for extractor selection
-* Modular extractor system
-* Independent logic per document type
-* Shared OCR pipeline
-
-###  Accuracy & Reliability
-
-* Confidence scoring system
-* Validation rules for extracted data
-* Error handling and fallback mechanisms
-* Detailed logging of processing pipeline
-
-###  API Features
-
-* REST API using Spring Boot
-* Swagger UI for testing
-* JSON structured output
-* Supports PDF and image uploads
+A production-ready **Java 17 Spring Boot REST API** for extracting structured data from multiple document types such as **Invoices, Aadhaar, PAN, Driving License, and Medical Certificates** using advanced OCR, intelligent extraction, and validation logic.
 
 ---
 
-## Technologies
+## 🌟 Overview
 
-* Java 17
-* Spring Boot
-* Maven
-* Tess4J (Tesseract OCR)
-* Apache PDFBox
-* OpenCV (Image Processing)
-* Regex & Text Processing
-* JSON-based Template Learning
-* Swagger (OpenAPI)
-* JUnit Testing
+This project is designed to handle **real-world documents with different formats**, not just fixed templates. It uses OCR combined with smart extraction techniques to convert unstructured documents into clean JSON output.
 
 ---
 
-## Core Concept
+## 📄 Supported Document Types
 
-```text
-Upload Document
-        ↓
-OCR + Preprocessing
-        ↓
-Text Cleaning
-        ↓
-Document Type Detection
-        ↓
-Extractor Factory
-        ↓
-Specific Extractor Execution
-        ↓
-Validation + Confidence Score
-        ↓
-Structured JSON Output
-```
+- 🧾 Invoice Extraction (Adaptive & Template-based)
+- 🪪 Aadhaar OCR Extraction
+- 🆔 PAN Card Extraction
+- 🚗 Driving License Extraction
+- 🏥 Medical Certificate Extraction (NEW)
+
+The system automatically detects the document type and applies the correct extraction logic.
 
 ---
 
-## Highlights
+## 🔍 OCR & Preprocessing
 
-* Works with **any invoice format**
-* Supports **multiple document types**
-* **Self-learning template system**
-* **Factory-based scalable design**
-* No database required
-* Production-ready REST API
+- OCR using **Tesseract (Tess4J)**
+- Image preprocessing:
+  - Grayscale conversion
+  - Adaptive thresholding
+  - Noise removal
+  - Deskew correction
+  - DPI enhancement
+  - Border removal
+
+---
+
+## 🧠 Intelligent Extraction Engine
+
+- Zone-based processing (Top / Middle / Bottom)
+- Multi-strategy extraction:
+  - Keyword-based
+  - Regex-based
+  - Positional extraction
+- Field validation for improved accuracy
+
+---
+
+## 🧾 Invoice Extraction Features
+
+- Works with **any invoice format**
+- Self-learning template system
+- Extracts:
+  - Invoice Number & Date
+  - Vendor & Buyer details
+  - GSTIN (validated)
+  - Subtotal, Tax, Total
+  - Line Items (table extraction)
+
+---
+
+## 🪪 Aadhaar Extraction
+
+- Name
+- Masked Aadhaar Number
+- Date of Birth
+- Gender
+- Address & Pincode
+
+---
+
+## 🆔 PAN Card Extraction
+
+- Name
+- PAN Number
+- Date of Birth
+
+---
+
+## 🚗 Driving License Extraction
+
+- Name
+- License Number
+- Date of Birth
+- Validity
+
+---
+
+## 🏥 Medical Certificate Extraction (NEW)
+
+Designed to handle both **printed and handwritten medical certificates**.
+
+### Extracts:
+- Organization Name
+- Applicant / Patient Name
+- From Date
+- To Date
+- Total Absent Days
+
+### Features:
+- Handles mixed handwritten + printed text
+- Context-based extraction (e.g., "rest from ___ to ___")
+- Date correction and validation
+- Intelligent fallback logic
+
+---
+
+## 🏗️ Architecture
+
+- Factory Design Pattern for extractor selection
+- Modular extractor system
+- Independent logic per document type
+- Shared OCR pipeline
+
+---
+
+## 🎯 Accuracy & Reliability
+
+- Confidence scoring system
+- Field validation rules
+- Error handling and fallback mechanisms
+- Detailed logging
+
+---
+
+## 🌐 API Endpoints
+
+### Invoice OCR
+POST /api/invoice/extract
+
+### Aadhaar OCR
+POST /api/aadhaar/extract
+
+### PAN OCR
+POST /api/pan/extract
+
+### Driving License OCR
+POST /api/license/extract
+
+### Medical Certificate OCR
+POST /api/medical/extract
+
+---
+
+## ⚙️ Tech Stack
+
+- Java 17
+- Spring Boot
+- Maven
+- Tess4J (Tesseract OCR)
+- Apache PDFBox
+- OpenCV
+- Regex & Text Processing
+- JSON-based Template Learning
+- Swagger (OpenAPI)
+- JUnit Testing
+
+---
+
+## 🔄 Workflow
+
+Upload Document  
+        ↓  
+OCR + Preprocessing  
+        ↓  
+Text Cleaning  
+        ↓  
+Document Type Detection  
+        ↓  
+Extractor Factory  
+        ↓  
+Specific Extractor Execution  
+        ↓  
+Validation + Confidence Score  
+        ↓  
+Structured JSON Output  
+
+---
+
+## 🚀 How to Run
+
+```bash
+mvn clean install
+mvn spring-boot:run
