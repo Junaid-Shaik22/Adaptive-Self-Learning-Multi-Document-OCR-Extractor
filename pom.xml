@@ -47,32 +47,6 @@
             <groupId>net.sourceforge.tess4j</groupId>
             <artifactId>tess4j</artifactId>
             <version>5.11.0</version>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.apache.pdfbox</groupId>
-                    <artifactId>pdfbox</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.apache.pdfbox</groupId>
-                    <artifactId>pdfbox-io</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.apache.pdfbox</groupId>
-                    <artifactId>fontbox</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.apache.pdfbox</groupId>
-                    <artifactId>pdfbox-tools</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.apache.pdfbox</groupId>
-                    <artifactId>pdfbox-debugger</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.apache.pdfbox</groupId>
-                    <artifactId>jbig2-imageio</artifactId>
-                </exclusion>
-            </exclusions>
         </dependency>
 
         <dependency>

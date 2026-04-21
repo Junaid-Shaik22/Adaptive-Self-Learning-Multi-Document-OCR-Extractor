@@ -96,7 +96,7 @@ public class DocumentProcessingServiceImpl implements DocumentProcessingService 
         return result;
     }
 
-    // ─── PDF → image rendering (PDFBox) ──────────────────────────────────────
+    // ─── PDF -> image rendering (ICEpdf) ─────────────────────────────────────
 
     private List<byte[]> renderPdfToImages(MultipartFile file) throws Exception {
         Document document = new Document();
