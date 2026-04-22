@@ -42,37 +42,312 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
 
     private List<LineItem> extractFromLines(List<LineIndexingService.IndexedLine> lines, TableSchema schema) {
         List<LineItem> items = new ArrayList<>();
-        List<String> pendingDescription = new ArrayList<>();
-        for (LineIndexingService.IndexedLine line : lines) {
-            String text = line.getText();
-            String lower = text.toLowerCase();
-            if (shouldStop(lower)) {
-                break;
-            }
-            if (isHeaderLike(text, schema) || OcrLayoutUtil.isNonItemLine(lower)) {
-                continue;
-            }
-            List<NumericToken> numericTokens = extractNumericTokens(text);
-            LineItem structuredSingleAmountItem = buildStructuredSingleAmountItem(text, numericTokens, pendingDescription);
-            if (structuredSingleAmountItem != null && isValidItem(structuredSingleAmountItem)) {
-                items.add(structuredSingleAmountItem);
-                pendingDescription.clear();
-                continue;
-            }
-            if (!looksLikeDataRow(text, numericTokens, pendingDescription)) {
-                String fragment = extractDescriptionFragment(text);
-                if (!fragment.isBlank()) {
-                    pendingDescription.add(fragment);
-                }
-                continue;
-            }
-            LineItem item = buildItem(text, numericTokens, pendingDescription, schema);
+        for (ItemRowCandidate candidate : collectItemRowCandidates(lines, schema)) {
+            LineItem item = buildItemFromCandidate(candidate, schema);
             if (item != null && isValidItem(item)) {
                 items.add(item);
             }
-            pendingDescription.clear();
         }
         return items;
+    }
+
+    private List<ItemRowCandidate> collectItemRowCandidates(List<LineIndexingService.IndexedLine> lines,
+                                                            TableSchema schema) {
+        List<ItemRowCandidate> candidates = new ArrayList<>();
+        List<String> pendingDescription = new ArrayList<>();
+        ItemRowCandidate current = null;
+        for (LineIndexingService.IndexedLine line : lines) {
+            String text = line.getText();
+            String lower = text == null ? "" : text.toLowerCase();
+            if (text == null || text.isBlank()) {
+                continue;
+            }
+            if (shouldStop(lower)) {
+                if (current != null) {
+                    candidates.add(current);
+                }
+                break;
+            }
+            if (isHeaderLike(text, schema)) {
+                continue;
+            }
+            boolean anchorRow = looksLikeAnchorRow(text, pendingDescription);
+            if (current != null) {
+                if (anchorRow && !isSupplementalContinuationLine(text)) {
+                    candidates.add(current);
+                    current = new ItemRowCandidate(pendingDescription, text);
+                    pendingDescription = new ArrayList<>();
+                    continue;
+                }
+                if (shouldAttachToCurrentRow(text, current)) {
+                    current.addContinuation(text);
+                    continue;
+                }
+                String fragment = extractDescriptionFragment(text);
+                if (!fragment.isBlank() && isUsefulContinuationFragment(fragment)) {
+                    current.addContinuation(fragment);
+                    continue;
+                }
+                if (OcrLayoutUtil.isNonItemLine(lower)) {
+                    candidates.add(current);
+                    current = null;
+                }
+                continue;
+            }
+            if (anchorRow) {
+                current = new ItemRowCandidate(pendingDescription, text);
+                pendingDescription = new ArrayList<>();
+                continue;
+            }
+            if (OcrLayoutUtil.isNonItemLine(lower)) {
+                continue;
+            }
+            String fragment = extractDescriptionFragment(text);
+            if (!fragment.isBlank()) {
+                pendingDescription.add(fragment);
+            }
+        }
+        if (current != null) {
+            candidates.add(current);
+        }
+        return candidates;
+    }
+
+    private LineItem buildItemFromCandidate(ItemRowCandidate candidate, TableSchema schema) {
+        if (candidate == null) {
+            return null;
+        }
+        LineItem structuredItem = buildStructuredItem(candidate, schema);
+        if (structuredItem != null && isValidItem(structuredItem)) {
+            return structuredItem;
+        }
+        List<NumericToken> numericTokens = extractNumericTokens(candidate.primaryText());
+        if (!looksLikeDataRow(candidate.primaryText(), numericTokens, candidate.descriptionParts)) {
+            return null;
+        }
+        return buildItem(candidate.primaryText(), numericTokens, candidate.descriptionParts, schema);
+    }
+
+    private LineItem buildStructuredItem(ItemRowCandidate candidate, TableSchema schema) {
+        StructuredRowData structured = extractStructuredRowData(candidate);
+        if (structured == null || structured.hsn == null || structured.numericText.isBlank()) {
+            return null;
+        }
+        List<NumericToken> numericTokens = extractNumericTokens(structured.numericText);
+        List<NumericToken> working = filterWorkingTokens(structured.numericText, numericTokens, structured.hsn);
+        if (working.isEmpty()) {
+            return null;
+        }
+        NumericInference inference = inferNumbers(working, schema, structured.numericText);
+        if (inference.amount == null || inference.amount <= 0) {
+            return null;
+        }
+        Double quantityValue = inference.quantityToken == null ? null : inference.quantityToken.value;
+        Double rateValue = inference.rateToken == null ? null : inference.rateToken.value;
+        if (quantityValue != null && quantityValue > inference.amount) {
+            quantityValue = null;
+        }
+        if (rateValue != null && rateValue > inference.amount) {
+            rateValue = null;
+        }
+        if (quantityValue == null && rateValue != null && rateValue > 0 && inference.amount > 0) {
+            Double inferredQuantity = inferQuantity(inference.amount, rateValue);
+            if (inferredQuantity != null && inferredQuantity <= 100000) {
+                quantityValue = inferredQuantity;
+            }
+        }
+        if (rateValue == null && quantityValue != null && quantityValue > 0) {
+            rateValue = inference.amount / quantityValue;
+        }
+        String description = cleanDescriptionText(String.join(" ", structured.descriptionParts));
+        if (description.isBlank()) {
+            return null;
+        }
+        LineItem item = new LineItem();
+        item.setDescription(description);
+        item.setHsn(structured.hsn);
+        item.setQuantity(quantityValue == null ? null : AmountUtil.formatAmount(quantityValue));
+        item.setUnitPrice(rateValue == null ? null : AmountUtil.formatAmount(rateValue));
+        item.setAmount(AmountUtil.formatAmount(inference.amount));
+        return item;
+    }
+
+    private StructuredRowData extractStructuredRowData(ItemRowCandidate candidate) {
+        String hsn = null;
+        List<String> descriptionParts = new ArrayList<>(candidate.descriptionParts);
+        List<String> numericChunks = new ArrayList<>();
+        boolean numericRegion = false;
+        for (String line : candidate.allTexts()) {
+            if (line == null || line.isBlank()) {
+                continue;
+            }
+            List<String> cells = splitStructuredCells(line);
+            if (cells.isEmpty()) {
+                if (numericRegion && isSupplementalContinuationLine(line)) {
+                    numericChunks.add(line);
+                } else if (looksLikePotentialDescriptionFragment(line)) {
+                    descriptionParts.add(line);
+                }
+                continue;
+            }
+            int hsnIndex = findHsnCellIndex(cells);
+            if (hsnIndex >= 0) {
+                hsn = extractHsnFromCell(cells.get(hsnIndex));
+                numericRegion = true;
+                for (int i = 0; i < hsnIndex; i++) {
+                    String cell = cleanDescriptionText(cells.get(i));
+                    if (cell.isBlank() || cell.matches("^\\d{1,3}$") || !isUsefulContinuationFragment(cell)) {
+                        continue;
+                    }
+                    descriptionParts.add(cell);
+                }
+                for (int i = hsnIndex + 1; i < cells.size(); i++) {
+                    collectStructuredCell(cells.get(i), descriptionParts, numericChunks);
+                }
+                continue;
+            }
+            if (numericRegion) {
+                for (String cell : cells) {
+                    collectStructuredCell(cell, descriptionParts, numericChunks);
+                }
+            } else {
+                for (String cell : cells) {
+                    String fragment = cleanDescriptionText(cell);
+                    if (!fragment.isBlank()) {
+                        descriptionParts.add(fragment);
+                    }
+                }
+            }
+        }
+        if (hsn == null) {
+            return null;
+        }
+        return new StructuredRowData(hsn, dedupeDescriptionParts(descriptionParts), String.join(" ", numericChunks));
+    }
+
+    private void collectStructuredCell(String cell,
+                                       List<String> descriptionParts,
+                                       List<String> numericChunks) {
+        if (cell == null || cell.isBlank()) {
+            return;
+        }
+        if (isPackingCell(cell)) {
+            String fragment = cleanDescriptionText(cell);
+            if (!fragment.isBlank()) {
+                descriptionParts.add(fragment);
+            }
+            return;
+        }
+        List<NumericToken> cellTokens = extractNumericTokens(cell);
+        if (!cellTokens.isEmpty()) {
+            numericChunks.add(cell);
+            return;
+        }
+        String fragment = cleanDescriptionText(cell);
+        if (!fragment.isBlank() && !isQuantityOrUnitCell(fragment.toLowerCase())) {
+            descriptionParts.add(fragment);
+        }
+    }
+
+    private List<String> dedupeDescriptionParts(List<String> parts) {
+        List<String> deduped = new ArrayList<>();
+        for (String part : parts) {
+            String cleaned = cleanDescriptionText(part);
+            if (cleaned.isBlank()) {
+                continue;
+            }
+            if (deduped.isEmpty() || !deduped.get(deduped.size() - 1).equalsIgnoreCase(cleaned)) {
+                deduped.add(cleaned);
+            }
+        }
+        return deduped;
+    }
+
+    private int findHsnCellIndex(List<String> cells) {
+        for (int i = 0; i < cells.size(); i++) {
+            if (extractHsnFromCell(cells.get(i)) != null) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private String extractHsnFromCell(String cell) {
+        return findHsn(cell);
+    }
+
+    private boolean isPackingCell(String cell) {
+        String lower = cell == null ? "" : cell.toLowerCase();
+        return lower.matches(".*\\d+\\s*[xX]\\s*\\d+.*(?:kg|kgs|pcs|nos|set|sets|box|bags?).*")
+                || lower.matches(".*\\d+\\s*[xX]\\s*\\d+(?:\\.\\d+)?\\s*[xX].*");
+    }
+
+    private boolean looksLikeAnchorRow(String text, List<String> pendingDescription) {
+        if (text == null) {
+            return false;
+        }
+        String lower = text.toLowerCase();
+        if (shouldStop(lower) || isHeaderLike(text, null) || OcrLayoutUtil.isNonItemLine(lower)) {
+            return false;
+        }
+        List<NumericToken> numericTokens = extractNumericTokens(text);
+        String hsn = findHsn(text);
+        boolean hasLetters = text.matches(".*[A-Za-z].*");
+        boolean hasCurrencyLike = numericTokens.stream()
+                .anyMatch(token -> !token.percentToken && AmountUtil.looksLikeCurrencyToken(token.token));
+        int significantTokens = countSignificantTokens(numericTokens);
+        if (hsn != null) {
+            return hasLetters || !pendingDescription.isEmpty() || significantTokens >= 2;
+        }
+        if (hasCurrencyLike && significantTokens >= 2) {
+            return hasLetters || !pendingDescription.isEmpty();
+        }
+        return !pendingDescription.isEmpty() && significantTokens >= 4 && hasDistinctAmountToken(text, numericTokens);
+    }
+
+    private boolean shouldAttachToCurrentRow(String text, ItemRowCandidate current) {
+        if (text == null || current == null) {
+            return false;
+        }
+        String lower = text.toLowerCase();
+        if (shouldStop(lower) || isHeaderLike(text, null) || OcrLayoutUtil.isNonItemLine(lower)) {
+            return false;
+        }
+        if (isSupplementalContinuationLine(text)) {
+            return true;
+        }
+        if (findHsn(text) != null) {
+            return false;
+        }
+        return looksLikePotentialDescriptionFragment(text);
+    }
+
+    private boolean isSupplementalContinuationLine(String text) {
+        if (text == null) {
+            return false;
+        }
+        String lower = text.toLowerCase();
+        if (shouldStop(lower) || isHeaderLike(text, null) || OcrLayoutUtil.isNonItemLine(lower)) {
+            return false;
+        }
+        if (findHsn(text) != null) {
+            return false;
+        }
+        List<NumericToken> numericTokens = extractNumericTokens(text);
+        if (numericTokens.isEmpty()) {
+            return false;
+        }
+        if (numericTokens.size() > 3) {
+            return false;
+        }
+        if (text.matches(".*[A-Za-z].*")) {
+            return isQuantityOrUnitCell(lower)
+                    || lower.contains("pcs")
+                    || lower.contains("nos")
+                    || lower.contains("set")
+                    || lower.contains("kgs");
+        }
+        return true;
     }
 
     private List<List<LineIndexingService.IndexedLine>> resolvePrimarySections(LineIndexingService.Zones zones) {
@@ -273,7 +548,11 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
         // Catch common total section labels that might be missed by generic stop lines
         return lower.contains("teal") || lower.contains("total tax amount") || lower.contains("grand total")
                 || lower.equals("total") || lower.contains("seal nos") || lower.contains("remarks")
-                || lower.contains("amount chargeable") || lower.contains("credit period");
+                || lower.contains("amount chargeable") || lower.contains("credit period")
+                || lower.contains("tax rate") || lower.contains("taxableamt")
+                || lower.contains("taxable amt") || lower.contains("bank details")
+                || lower.contains("company's bank details") || lower.contains("our bank details")
+                || (lower.contains("rupees") && lower.contains("only"));
     }
 
     private boolean isHeaderLike(String text, TableSchema schema) {
@@ -318,7 +597,7 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
         if (working.isEmpty()) {
             return null;
         }
-        NumericInference inference = inferNumbers(working, schema);
+        NumericInference inference = inferNumbers(working, schema, text);
         if (inference.amount == null || inference.amount <= 0) {
             return null;
         }
@@ -434,9 +713,6 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
         String normalized = cleanDescriptionText(text).replaceFirst("^\\s*\\d+[\\].)]?\\s*", "");
         String lower = normalized.toLowerCase();
         if (normalized.isBlank() || OcrLayoutUtil.isNonItemLine(lower) || OcrLayoutUtil.isItemStopLine(lower)) {
-            return "";
-        }
-        if (!normalized.matches(".*[A-Za-z].*")) {
             return "";
         }
         return normalized;
@@ -563,12 +839,68 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
         return lower.matches("(?:x\\s*)?\\d+(?:\\.\\d+)?\\s*(?:pcs|pc|nos|no|set|sets|kg|kgs|mt|unit|units)?");
     }
 
+    private boolean isUsefulContinuationFragment(String text) {
+        String fragment = cleanDescriptionText(text);
+        if (fragment.isBlank() || !fragment.matches(".*[A-Za-z].*")) {
+            return false;
+        }
+        String lower = fragment.toLowerCase();
+        if (shouldStop(lower)
+                || OcrLayoutUtil.isNonItemLine(lower)
+                || OcrLayoutUtil.isAddressLike(lower)
+                || OcrLayoutUtil.isLogisticsLike(lower)
+                || lower.contains("gstin")
+                || lower.contains("invoice")) {
+            return false;
+        }
+        if (badSymbolCount(fragment) > Math.max(2, fragment.length() / 8)) {
+            return false;
+        }
+        int alphaWords = alphaWordCount(fragment);
+        int longestAlphaWord = longestAlphaWord(fragment);
+        boolean hasDigitOrModelSignal = fragment.matches(".*\\d.*") || fragment.contains("-") || fragment.contains("/");
+        return hasDigitOrModelSignal
+                || longestAlphaWord >= 6
+                || (alphaWords >= 2 && longestAlphaWord >= 5)
+                || OcrLayoutUtil.looksLikeMeaningfulUppercaseLine(fragment);
+    }
+
+    private int alphaWordCount(String value) {
+        int count = 0;
+        for (String word : value.split("\\s+")) {
+            if (word.replaceAll("[^A-Za-z]", "").length() >= 2) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private int longestAlphaWord(String value) {
+        int longest = 0;
+        for (String word : value.split("\\s+")) {
+            longest = Math.max(longest, word.replaceAll("[^A-Za-z]", "").length());
+        }
+        return longest;
+    }
+
+    private int badSymbolCount(String value) {
+        int bad = 0;
+        for (char ch : value.toCharArray()) {
+            if (!Character.isLetterOrDigit(ch) && !Character.isWhitespace(ch) && "'/-.,:&()".indexOf(ch) < 0) {
+                bad++;
+            }
+        }
+        return bad;
+    }
+
     private String cleanDescriptionText(String text) {
         if (text == null) {
             return "";
         }
         String cleaned = text.replace('|', ' ').replace('_', ' ');
+        cleaned = cleaned.replaceAll("[;!?\\[\\]{}=]+", " ");
         cleaned = cleaned.replaceAll("\\d+X\\d+", " "); // remove quantity like 5X500
+        cleaned = cleaned.replaceFirst("^\\s*\\d+[\\].):,-]*\\s*", "");
         cleaned = cleaned.replaceAll("(?i)\\b(?:hsn|sac|qty|quantity|rate|amount|uom|unit price|taxable value)\\b", " ");
         cleaned = cleaned.replaceAll("\\s{2,}", " ").trim();
         cleaned = RegexUtil.normalizeLine(cleaned);
@@ -646,7 +978,7 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
         return working;
     }
 
-    private NumericInference inferNumbers(List<NumericToken> working, TableSchema schema) {
+    private NumericInference inferNumbers(List<NumericToken> working, TableSchema schema, String sourceText) {
         NumericInference inference = new NumericInference();
         double bestScore = Double.NEGATIVE_INFINITY;
         for (int i = 0; i < working.size(); i++) {
@@ -688,6 +1020,16 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
             return inference;
         }
 
+        NumericInference repeatedAmountInference = inferRepeatedAmountPattern(working);
+        if (repeatedAmountInference.amount != null) {
+            return repeatedAmountInference;
+        }
+
+        NumericInference calculated = inferCalculatedAmount(working, sourceText);
+        if (calculated.amount != null) {
+            return calculated;
+        }
+
         NumericToken amountToken = chooseFallbackAmount(working);
         if (amountToken == null) {
             return inference;
@@ -706,6 +1048,193 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
             inference.rateToken = others.get(1);
         }
         return inference;
+    }
+
+    private NumericInference inferRepeatedAmountPattern(List<NumericToken> working) {
+        NumericInference inference = new NumericInference();
+        List<NumericToken> usable = new ArrayList<>();
+        for (NumericToken token : working) {
+            if (!token.percentToken && token.value > 0) {
+                usable.add(token);
+            }
+        }
+        if (usable.size() < 3) {
+            return inference;
+        }
+        NumericToken first = usable.get(0);
+        NumericToken penultimate = usable.get(usable.size() - 2);
+        NumericToken last = usable.get(usable.size() - 1);
+        if (!AmountUtil.looksLikeCurrencyToken(first.token)
+                || !AmountUtil.approximatelyEquals(penultimate.value, last.value)
+                || first.value >= last.value) {
+            return inference;
+        }
+        inference.rateToken = first;
+        inference.amount = last.value;
+        return inference;
+    }
+
+    private NumericInference inferCalculatedAmount(List<NumericToken> working, String sourceText) {
+        NumericInference inference = new NumericInference();
+        NumericToken quantityToken = chooseQuantityToken(working, sourceText);
+        if (quantityToken == null) {
+            return inference;
+        }
+        NumericToken rateToken = chooseRateToken(working, quantityToken);
+        if (rateToken == null || rateToken.value <= 0) {
+            return inference;
+        }
+        double computedAmount = quantityToken.value * rateToken.value;
+        if (computedAmount <= 0) {
+            return inference;
+        }
+        NumericToken approximateAmount = findApproximateAmountToken(working, rateToken, computedAmount);
+        if (approximateAmount != null || hasTaxCompanion(working, rateToken, computedAmount)) {
+            inference.quantityToken = quantityToken;
+            inference.rateToken = rateToken;
+            inference.amount = computedAmount;
+        }
+        return inference;
+    }
+
+    private NumericToken chooseQuantityToken(List<NumericToken> working, String sourceText) {
+        NumericToken best = null;
+        int bestScore = Integer.MIN_VALUE;
+        for (int i = 0; i < working.size(); i++) {
+            NumericToken token = working.get(i);
+            if (token.percentToken || token.value <= 0 || token.value > 100000) {
+                continue;
+            }
+            int score = 0;
+            if (isLikelySerialToken(token, sourceText, i)) {
+                score -= 50;
+            }
+            if (hasUnitKeywordNearToken(sourceText, token)) {
+                score += 45;
+            }
+            if (!AmountUtil.looksLikeCurrencyToken(token.token)) {
+                score += 18;
+            }
+            if (Math.rint(token.value) == token.value) {
+                score += 8;
+            }
+            if (token.value >= 1 && token.value <= 10000) {
+                score += 12;
+            }
+            if (i + 1 < working.size() && working.get(i + 1).value > token.value) {
+                score += 10;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = token;
+            }
+        }
+        return bestScore >= 10 ? best : null;
+    }
+
+    private NumericToken chooseRateToken(List<NumericToken> working, NumericToken quantityToken) {
+        if (quantityToken == null) {
+            return null;
+        }
+        NumericToken best = null;
+        int bestScore = Integer.MIN_VALUE;
+        boolean afterQuantity = false;
+        for (NumericToken token : working) {
+            if (token == quantityToken) {
+                afterQuantity = true;
+                continue;
+            }
+            if (!afterQuantity || token.percentToken || token.value <= 0) {
+                continue;
+            }
+            int score = 0;
+            if (AmountUtil.looksLikeCurrencyToken(token.token)) {
+                score += 24;
+            }
+            if (token.value > quantityToken.value) {
+                score += 14;
+            }
+            if (token.value < quantityToken.value * 1000) {
+                score += 8;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = token;
+            }
+        }
+        return bestScore >= 12 ? best : null;
+    }
+
+    private NumericToken findApproximateAmountToken(List<NumericToken> working,
+                                                    NumericToken rateToken,
+                                                    double computedAmount) {
+        boolean afterRate = false;
+        for (NumericToken token : working) {
+            if (token == rateToken) {
+                afterRate = true;
+                continue;
+            }
+            if (!afterRate || token.percentToken || token.value <= 0) {
+                continue;
+            }
+            if (Math.abs(token.value - computedAmount) <= Math.max(1.0, computedAmount * 0.10)) {
+                return token;
+            }
+        }
+        return null;
+    }
+
+    private boolean hasTaxCompanion(List<NumericToken> working,
+                                    NumericToken rateToken,
+                                    double computedAmount) {
+        List<Double> laterValues = new ArrayList<>();
+        boolean afterRate = false;
+        for (NumericToken token : working) {
+            if (token == rateToken) {
+                afterRate = true;
+                continue;
+            }
+            if (!afterRate || token.percentToken || token.value <= 0) {
+                continue;
+            }
+            laterValues.add(token.value);
+        }
+        for (int i = 0; i < laterValues.size(); i++) {
+            for (int j = 0; j < laterValues.size(); j++) {
+                if (i == j) {
+                    continue;
+                }
+                if (AmountUtil.approximatelyEquals(computedAmount + laterValues.get(i), laterValues.get(j))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean isLikelySerialToken(NumericToken token, String sourceText, int index) {
+        if (token == null || sourceText == null) {
+            return false;
+        }
+        return index == 0
+                && token.value <= 10
+                && token.token.replaceAll("[^0-9]", "").length() <= 2
+                && sourceText.trim().startsWith(token.token);
+    }
+
+    private boolean hasUnitKeywordNearToken(String sourceText, NumericToken token) {
+        if (sourceText == null || token == null) {
+            return false;
+        }
+        int start = Math.max(0, token.end);
+        int end = Math.min(sourceText.length(), token.end + 12);
+        String suffix = sourceText.substring(start, end).toLowerCase();
+        for (String keyword : UNIT_KEYWORDS) {
+            if (suffix.contains(keyword)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private NumericToken chooseFallbackAmount(List<NumericToken> working) {
@@ -797,5 +1326,39 @@ public class LineItemExtractor implements FieldExtractor<List<LineItem>> {
         private NumericToken quantityToken;
         private NumericToken rateToken;
         private Double amount;
+    }
+
+    private static class ItemRowCandidate {
+        private final List<String> descriptionParts;
+        private final List<String> rowTexts = new ArrayList<>();
+
+        private ItemRowCandidate(List<String> pendingDescription, String anchorText) {
+            this.descriptionParts = new ArrayList<>(pendingDescription);
+            this.rowTexts.add(anchorText);
+        }
+
+        private void addContinuation(String text) {
+            this.rowTexts.add(text);
+        }
+
+        private String primaryText() {
+            return String.join(" ", rowTexts);
+        }
+
+        private List<String> allTexts() {
+            return rowTexts;
+        }
+    }
+
+    private static class StructuredRowData {
+        private final String hsn;
+        private final List<String> descriptionParts;
+        private final String numericText;
+
+        private StructuredRowData(String hsn, List<String> descriptionParts, String numericText) {
+            this.hsn = hsn;
+            this.descriptionParts = descriptionParts;
+            this.numericText = numericText == null ? "" : numericText;
+        }
     }
 }

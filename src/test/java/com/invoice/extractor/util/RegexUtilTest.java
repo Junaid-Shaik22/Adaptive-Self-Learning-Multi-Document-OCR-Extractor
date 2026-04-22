@@ -24,4 +24,13 @@ class RegexUtilTest {
     void returnsNullForClearlyInvalidGstinNoise() {
         assertNull(RegexUtil.repairGstinCandidate("INVALIDGSTINCODE"));
     }
+
+    @Test
+    void repairsBuyerGstinWithWrongSeparatorCharacter() {
+        String repaired = RegexUtil.repairGstinCandidate("36AAAGN1030Q129");
+
+        assertNotNull(repaired);
+        assertEquals("36AAAGN1030Q1Z9", repaired);
+        assertTrue(RegexUtil.hasGstinChecksum(repaired));
+    }
 }

@@ -3549,6 +3549,8 @@ public class InvoiceServiceImpl implements InvoiceService {
             return null;
         }
         String cleaned = RegexUtil.normalizeLine(value.replace('|', ' ').replace('_', ' '));
+        cleaned = cleaned.replaceAll("[;!?\\[\\]{}=]+", " ");
+        cleaned = cleaned.replaceFirst("^\\s*\\d+[\\].):,-]*\\s*", "");
         cleaned = cleaned.replaceAll("\\s{2,}", " ").trim();
         cleaned = cleaned.replaceFirst("^[,./:&()\\-]+", "").replaceFirst("[,./:&()\\-]+$", "").trim();
         return cleaned.isBlank() ? null : cleaned;

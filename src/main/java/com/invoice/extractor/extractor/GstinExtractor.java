@@ -406,12 +406,24 @@ public class GstinExtractor implements FieldExtractor<String[]> {
         if (normalized.length() != 15) {
             return false;
         }
-        int[] digitLikePositions = {0, 1, 7, 8, 9, 10, 12};
+        int[] digitLikePositions = {0, 1, 7, 8, 9, 10};
         for (int position : digitLikePositions) {
             char value = normalized.charAt(position);
             if (!Character.isDigit(value)) {
                 return true;
             }
+        }
+        int[] letterLikePositions = {2, 3, 4, 5, 6, 11};
+        for (int position : letterLikePositions) {
+            if (!Character.isLetter(normalized.charAt(position))) {
+                return true;
+            }
+        }
+        char entityCode = normalized.charAt(12);
+        if (!Character.isLetterOrDigit(entityCode)
+                || entityCode == '0'
+                || "ILOQDSZBTG".indexOf(entityCode) >= 0) {
+            return true;
         }
         return normalized.charAt(13) != 'Z';
     }

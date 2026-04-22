@@ -263,6 +263,86 @@ class InvoiceServiceImplTest {
     }
 
     @Test
+    void extractsLineItemsFromAuditOcrMysoreLayout() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, auditMysoreActualOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertEquals("GST2324/2808", data.getInvoiceNumber());
+        assertEquals(1, data.getLineItems().size());
+        assertTrue(data.getLineItems().get(0).getDescription().contains("Anhydrous"));
+        assertEquals("28141000", data.getLineItems().get(0).getHsn());
+        assertEquals("2500", data.getLineItems().get(0).getQuantity());
+        assertEquals("76", data.getLineItems().get(0).getUnitPrice());
+        assertEquals("190000", data.getLineItems().get(0).getAmount());
+    }
+
+    @Test
+    void extractsLineItemsFromAuditOcrParthLayout() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, auditParthActualOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertEquals("107", data.getInvoiceNumber());
+        assertEquals(1, data.getLineItems().size());
+        assertTrue(data.getLineItems().get(0).getDescription().contains("BOSCH make cordless Drilling machine"));
+        assertEquals("8467", data.getLineItems().get(0).getHsn());
+        assertEquals("4", data.getLineItems().get(0).getQuantity());
+        assertEquals("9976.27", data.getLineItems().get(0).getUnitPrice());
+        assertEquals("39905.08", data.getLineItems().get(0).getAmount());
+    }
+
+    @Test
+    void extractsLineItemsFromAuditOcrAvTradingLayout() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, auditAvTradingActualOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertEquals("AV/23-24/265", data.getInvoiceNumber());
+        assertEquals(1, data.getLineItems().size());
+        assertTrue(data.getLineItems().get(0).getDescription().contains("CUTTING WHEEL"));
+        assertEquals("6804", data.getLineItems().get(0).getHsn());
+        assertEquals("180", data.getLineItems().get(0).getQuantity());
+        assertEquals("38.14", data.getLineItems().get(0).getUnitPrice());
+        assertEquals("8100", data.getLineItems().get(0).getAmount());
+    }
+
+    @Test
+    void extractsLineItemsFromAuditOcrMadhavLayout() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, auditMadhavActualOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertEquals("MPE/23-24/01191", data.getInvoiceNumber());
+        assertEquals(1, data.getLineItems().size());
+        assertTrue(data.getLineItems().get(0).getDescription().contains("TARANG MATTRESS"));
+        assertEquals("94042190", data.getLineItems().get(0).getHsn());
+        assertEquals("70", data.getLineItems().get(0).getQuantity());
+        assertEquals("4067.8", data.getLineItems().get(0).getUnitPrice());
+        assertEquals("284746", data.getLineItems().get(0).getAmount());
+    }
+
+    @Test
+    void extractsLineItemsFromAuditOcrAscencionLayout() {
+        Path templatePath = tempDir.resolve("templates.json");
+        InvoiceServiceImpl service = buildService(templatePath, auditAscencionActualOcr());
+
+        InvoiceData data = service.processInvoice(new MockMultipartFile("file", "invoice.png", "image/png", new byte[0]));
+
+        assertEquals("295", data.getInvoiceNumber());
+        assertEquals(1, data.getLineItems().size());
+        assertTrue(data.getLineItems().get(0).getDescription().contains("Weller 200 Deg C"));
+        assertEquals("8515", data.getLineItems().get(0).getHsn());
+        assertEquals("1", data.getLineItems().get(0).getQuantity());
+        assertEquals("13559.31", data.getLineItems().get(0).getUnitPrice());
+        assertEquals("13559.31", data.getLineItems().get(0).getAmount());
+    }
+
+    @Test
     void extractsMadhavFoamStyleInvoiceWithBuyerGstinAndInvoiceAmount() {
         Path templatePath = tempDir.resolve("templates.json");
         InvoiceServiceImpl service = buildService(templatePath, madhavFoamStyleOcr());
@@ -1424,6 +1504,127 @@ class InvoiceServiceImplTest {
                 SGST 9% 3600
                 Grand Total 47200
                 Amount Payable 47200
+                """;
+    }
+
+    private String auditMysoreActualOcr() {
+        return """
+                Tax Invoice
+                ql | Mysore Ammonia and Chemicals Limited
+                Plot No.10/L1, Phase - III (Expansion), I.P Pashamylaram, Patancheru Mandal, Sangareddy
+                District, Telangana
+                Pin Code : 502307
+                Phone | : 9000257937 | Email | : hyderabadoffice@mysoreammonia.com MSME | : UDYAM-TS-25-0000360
+                GSTIN | : 36AABCC9037H1ZN | CIN | : U24121MH1998PLC115586 | PAN | : AABCCS037H
+                Invoice No. | : GST2324/2808 | Transportation Mode : BY ROAD
+                Invoice Date. | ; 6-Feb-24 | Vehicle No. | : AP-28-TD-2823
+                Payment Terms | > IMMEDIATE | Challan No & Date : GST2324/2808 / 6-Feb-24
+                Transporter Name : | Place of Supply | : Telangana
+                E-Way Bill No/Date : | Customer PONo. : GEMC-511687726196900
+                IEC No. | Customer PO Date. : 28-Sep-23
+                Destination | > ECIL
+                Details of Recipient ( Billed to) | : | Details of Consignee ( Shipped to)
+                M/s.The Stores Officer/Asst. Stores Officer | M/s.The Stores Officer/Asst. Stores Officer
+                Directorate of Purchase & Stores,, Hyderabad Regional Stores Unit,, | Directorate of Purchase & Stores,, Hyderabad Regional Stores Unit,,
+                Nuclear Fuel Complex, ECIL (PO),, Hyderabad, | Nuclear Fuel Complex, ECIL (PO),, Hyderabad,
+                Pin Code : 500062 | Pin Code : 500062
+                State : Telangana | State Code : 36 | State : Telangana | State Code : 36
+                GSTIN No. : 36AAAGN1030Q129 | PAN No. : AAAGN1030Q | GSTIN No. : 36AAAGN1030Q12Z9 | PAN No. : AAAGN1030Q
+                Sr. | Description of | HSN/SAC | No.of | Qty | Rate | UOM | Taxable | GST | GST
+                No| Goods/Services | Code | Pkgs | Value | % | Amount
+                1 Anhydrous (Liquid) Ammonia / AmmoniaGas | 28141000 | 5X500 KG | 2500.000 | 76.00} kgs | 190000.00| 18.00 | 34200.00
+                TOTAL | 34200.00
+                CGST 9% - Sales | 17100.00
+                SGST 9% - Sales | 17100.00
+                Total Invoice Value (In Figure) : 224200.00
+                """;
+    }
+
+    private String auditParthActualOcr() {
+        return """
+                PARTH ENERGY SYSTEMS.PVT. LTD
+                G-1, Radhika Complex, Loha Mandi, S.C. Road, Jaipur -302001 Rajasthan
+                Phone No. : 0141-2362811 Email : parthenergysystem@rediffmail.com
+                GST NO..08AAECP5414C1ZR, State - Rajasthan, State Code - 08, PAN- AAECPS5414C
+                TAX INVOICE
+                Purchase Order No. Date : GEMC-511687764010683
+                Invoice No. : : 107 | Purchase Order Dated : 13-01-2024
+                Date | : 30-01-2024
+                State : Rajasthan, State Code : 08 | Place of Supply : Hyderabad
+                Billed to
+                Sr. Manager Materials, Departmnet of Atomic Energy,
+                HRPSU, NFC, P.O. ECIL,,
+                HYDERABAD, TELANGANA-500062, India
+                GST IN/ | 36AAAGN1030Q12Z9
+                S. No | Name of Good | rial | Qt | UOM | Rate | Amount | Discount | Taxable
+                BOSCH make cordless Drilling
+                machine, Model Number GSR185.
+                1 | ; | ; | 8467 | 9976.27 | 39905.08 | 39905.08
+                Li professional
+                Sub Total | 39905.08
+                Add : IGST | 7182.92
+                Total Amount After Tax | 47088.00
+                """;
+    }
+
+    private String auditAvTradingActualOcr() {
+        return """
+                GSTIN : 27BLPPS1385F1ZM | Triplicate for Assesses.
+                AV TRADING COMPANY
+                Tel. : 9075151448/7719090608 email tavtradingcomp@gmail.com
+                Party Details : | Invoice No. | AV/23-24/265
+                DEPARTMENT OF ATOMIC ENERGY | Dated | : 29-01-2024
+                DIRECTORATE OF PURCHASE AND STORES | Place of Supply : Telangana (36)
+                HRPSU, NFC, P.O. ECIL,, Hyderabad, TELANGANA-500062
+                GSTIN/UIN = : 36AAAGN1030Q129
+                Order No. | : GEMC-511687773293120 | Date : 16-01-2024
+                DESCRIPTION OF GOODS | HSN | QTY | UNIT | PRICE | AMOUNT(* )
+                1 |CUTTING WHEEL 125MMX1.2MMX22MM | 6804 | 180.00|Nos | 38,14 | 8,100.00
+                MAKE - APIDOR
+                Grand Total | 180.00 Nos | 8,100.00
+                18% | 6,864.41 1,235.59 1,235.59
+                """;
+    }
+
+    private String auditMadhavActualOcr() {
+        return """
+                GSTIN : O6AAMCM3562G12D | GST INVOICE | Original For Buyer
+                MADHAV PE FOAM PRIVATE LTD
+                PAN.No : AAMCN3562G
+                Invoice No MPE/23-24/01191 | Date : | 20/01/2024
+                Details of Receiver (Billed to)
+                NUCLEAR FUEL COMPLEX
+                Hyderabad - 500062
+                STATE ; TELANGANA | CODE : 36
+                GSTIN : 36AAAGN10309129 PAN : AAAGN1030Q
+                SN DESCRIPITION OF GOODS | H.S.N PKG | QTY UNT | RATE | SALE AMT | IG8T% DIS%
+                1] TARANG MATTRESS?79*36 | x 76.0x | 94042190 | 1 | 70.00 Pcs | 4067.800 | 264746,.00 | 18.00
+                TOTAL | BO | 1 | 70,00 | 284746.00
+                PCS : | 70 TOTAL : | 70.00 | TAXABLE AMT | 284746.00
+                G,S.T | 51254.28
+                INVOICE AMT | 336000.00
+                H.S.N. | GST % PKG | QTY | AMOUNT | I.GST
+                94042190 18.00 | 1 | 70,00 284746.00 51254,28
+                """;
+    }
+
+    private String auditAscencionActualOcr() {
+        return """
+                TAX INVOICE
+                ASCENCION ELECTRONICS
+                GSTIN : O7CXGPS0971P1ZP
+                Invoice No. | > 295
+                Dated | > 19-12-2023
+                Department of Atomic Energy Stores
+                HRPSU, NFC, P.O. ECIL,, HYDERABAD, TELANGANA-500062
+                GSTIN / UIN | 36AAAGN1030Q1Z9
+                S.N. |Description of Goods | HSN/SAC | Qty. | Unit | Price| IGST | IGST | Amount(% )
+                Weller 200 Deg C ta 450 Deg C 24 V Out | 8515 | 1.00! Pcs. | 13,559.31 | 18.00 %| 2,440.68 | 15,999.99
+                Desoldering Station Vath Digital Display
+                MODEL. WELOLO
+                Grand Total | 1.00 Pcs. | 15,999.99
+                Tax Rate TaxableAmt. IGSTAmt. Total Tax
+                18% | 13,559.31 2,440.68 | 2,440.68
                 """;
     }
 }

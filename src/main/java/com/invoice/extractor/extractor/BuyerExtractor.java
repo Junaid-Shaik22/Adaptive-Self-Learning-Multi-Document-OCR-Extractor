@@ -149,18 +149,20 @@ public class BuyerExtractor implements FieldExtractor<String> {
             }
             List<String> block = new ArrayList<>();
             Integer startLine = null;
-            for (int j = Math.max(0, i - 4); j < i; j++) {
+            for (int j = Math.max(0, i - 6); j < i; j++) {
                 LineIndexingService.IndexedLine currentLine = zones.middleZone.get(j);
-                if (!sameColumn(gstinLine, currentLine)) {
-                    if (columnCollision(gstinLine, currentLine)) {
-                        break;
-                    }
+                boolean sameOrCompatibleColumn = sameColumn(gstinLine, currentLine);
+                if (!sameOrCompatibleColumn && !looksLikeNearbyOrganizationLine(currentLine.getText())) {
+                    continue;
+                }
+                if (hasLargeVerticalGap(gstinLine, currentLine) && !looksLikeNearbyOrganizationLine(currentLine.getText())) {
                     continue;
                 }
                 String raw = currentLine.getText();
                 if (stopCondition(raw, buyerGstin)) {
-                    block.clear();
-                    startLine = null;
+                    if (!block.isEmpty()) {
+                        break;
+                    }
                     continue;
                 }
                 String sanitized = sanitizeBuyerLine(raw);
@@ -184,6 +186,18 @@ public class BuyerExtractor implements FieldExtractor<String> {
             }
         }
         return best;
+    }
+
+    private boolean looksLikeNearbyOrganizationLine(String text) {
+        String sanitized = sanitizeBuyerLine(text);
+        if (!isValid(sanitized)) {
+            return false;
+        }
+        String lower = sanitized.toLowerCase(Locale.ROOT);
+        return RegexUtil.containsAnyKeyword(lower, ORGANIZATION_KEYWORDS)
+                || OcrLayoutUtil.isGovernmentLike(lower)
+                || OcrLayoutUtil.looksLikeMeaningfulUppercaseLine(sanitized)
+                || sanitized.startsWith("M/s.");
     }
 
     private int scoreExtractedBlock(FieldExtractionResult<String> result,

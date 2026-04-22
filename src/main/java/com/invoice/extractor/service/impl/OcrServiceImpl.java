@@ -7,6 +7,7 @@ import com.invoice.extractor.service.OcrService;
 import com.invoice.extractor.service.PdfPageConverter;
 import com.invoice.extractor.service.InvoiceTextCleaningService;
 import com.invoice.extractor.util.DateUtil;
+import com.invoice.extractor.util.OcrLayoutUtil;
 import com.invoice.extractor.util.RegexUtil;
 import com.invoice.extractor.util.TextUtil;
 import net.sourceforge.tess4j.ITesseract;
@@ -37,8 +38,8 @@ public class OcrServiceImpl implements OcrService {
     private static final int UPSCALE_FACTOR = 2;
     private static final int[] PAGE_SEGMENTATION_MODES = {11, 6, 4};
     private static final long PAGE_TIMEOUT_MILLIS = 180_000L;
-    private static final long OCR_ATTEMPT_TIMEOUT_MILLIS = 45_000L;
-    private static final long FALLBACK_TIMEOUT_MILLIS = 20_000L;
+    private static final long OCR_ATTEMPT_TIMEOUT_MILLIS = 25_000L;
+    private static final long FALLBACK_TIMEOUT_MILLIS = 12_000L;
     private static final int MIN_FALLBACK_DPI = 150;
     private static final Set<String> SUPPORTED_IMAGE_EXTENSIONS = Set.of(".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp");
     private static final Set<String> SUPPORTED_IMAGE_CONTENT_TYPES = Set.of(
@@ -351,6 +352,11 @@ public class OcrServiceImpl implements OcrService {
         score += countKeyword(lower, "bill to") * 10;
         score += countKeyword(lower, "ship to") * 10;
         score += countKeyword(lower, "amount") * 6;
+        score += countKeyword(lower, "hsn") * 8;
+        score += countKeyword(lower, "qty") * 7;
+        score += countKeyword(lower, "quantity") * 7;
+        score += countKeyword(lower, "rate") * 5;
+        score += OcrLayoutUtil.looksLikeTableHeader(lower) ? 24 : 0;
         score += countKeyword(lower, "medical certificate") * 18;
         score += countKeyword(lower, "recommended for leave") * 22;
         score += countKeyword(lower, "communication of leave") * 18;

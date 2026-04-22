@@ -34,31 +34,29 @@ public class VendorExtractor implements FieldExtractor<String> {
     public FieldExtractionResult<String> extractResult(LineIndexingService.Zones zones, String vendorGstin) {
         List<LineIndexingService.IndexedLine> headerLines = headerWindow(zones);
         VendorCandidate strictCandidate = findBestScoredCandidate(headerLines, vendorGstin, true);
-        if (strictCandidate != null && strictCandidate.score >= MIN_STRICT_SCORE) {
-            return strictCandidate.toResult();
-        }
-
         VendorCandidate nearGstin = findNearGstinCandidate(headerLines, vendorGstin);
-        if (nearGstin != null && nearGstin.score >= MIN_RELAXED_SCORE) {
-            return nearGstin.toResult();
-        }
-
         VendorCandidate relaxedCandidate = findBestScoredCandidate(headerLines, vendorGstin, false);
-        if (relaxedCandidate != null && relaxedCandidate.score >= MIN_RELAXED_SCORE) {
-            return relaxedCandidate.toResult();
-        }
-
         VendorCandidate uppercaseFallback = findUppercaseFallback(headerLines);
-        if (uppercaseFallback != null && uppercaseFallback.score >= MIN_RELAXED_SCORE) {
-            return uppercaseFallback.toResult();
-        }
-
         VendorCandidate voucherPayee = findVoucherPayeeCandidate(zones.allLines);
-        if (voucherPayee != null) {
-            return voucherPayee.toResult();
+
+        VendorCandidate best = null;
+        if (strictCandidate != null && strictCandidate.score >= MIN_STRICT_SCORE) {
+            best = strictCandidate;
+        }
+        if (nearGstin != null && nearGstin.score >= MIN_RELAXED_SCORE && isBetterCandidate(nearGstin, best)) {
+            best = nearGstin;
+        }
+        if (relaxedCandidate != null && relaxedCandidate.score >= MIN_RELAXED_SCORE && isBetterCandidate(relaxedCandidate, best)) {
+            best = relaxedCandidate;
+        }
+        if (uppercaseFallback != null && uppercaseFallback.score >= MIN_RELAXED_SCORE && isBetterCandidate(uppercaseFallback, best)) {
+            best = uppercaseFallback;
+        }
+        if (voucherPayee != null && isBetterCandidate(voucherPayee, best)) {
+            best = voucherPayee;
         }
 
-        return new FieldExtractionResult<>(null, "fallback", null);
+        return best == null ? new FieldExtractionResult<>(null, "fallback", null) : best.toResult();
     }
 
     private VendorCandidate findBestScoredCandidate(List<LineIndexingService.IndexedLine> lines,
@@ -228,6 +226,15 @@ public class VendorExtractor implements FieldExtractor<String> {
         if (digits > Math.max(2, letters / 3) && !containsCompanyKeyword(text) && !containsYearSuffix(text)) {
             return false;
         }
+        if (text.length() < 8 && !containsCompanyKeyword(text)) {
+            return false;
+        }
+        if (alphaWordCount(text) < 2 && !containsCompanyKeyword(text) && !OcrLayoutUtil.looksLikeMeaningfulUppercaseLine(text)) {
+            return false;
+        }
+        if (longestAlphaWord(text) < 4 && !containsCompanyKeyword(text)) {
+            return false;
+        }
         if (!hasMeaningfulWords(text, strict ? 2 : 1)) {
             return false;
         }
@@ -285,6 +292,8 @@ public class VendorExtractor implements FieldExtractor<String> {
         if (!containsCompanyKeyword(text) && digitCount(text) > 0) {
             score -= 26;
         }
+        score += alphaWordCount(text) >= 2 ? 8 : -24;
+        score += longestAlphaWord(text) >= 6 ? 10 : -12;
         if (strict && !containsCompanyKeyword(text) && !OcrLayoutUtil.looksLikeMeaningfulUppercaseLine(text)) {
             score -= 28;
         }
@@ -346,6 +355,24 @@ public class VendorExtractor implements FieldExtractor<String> {
             }
         }
         return meaningfulWords >= minimumWords;
+    }
+
+    private int alphaWordCount(String text) {
+        int count = 0;
+        for (String word : text.split("\\s+")) {
+            if (word.replaceAll("[^A-Za-z]", "").length() >= 2) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private int longestAlphaWord(String text) {
+        int longest = 0;
+        for (String word : text.split("\\s+")) {
+            longest = Math.max(longest, word.replaceAll("[^A-Za-z]", "").length());
+        }
+        return longest;
     }
 
     private boolean containsYearSuffix(String text) {
@@ -423,6 +450,24 @@ public class VendorExtractor implements FieldExtractor<String> {
         return anchor.getColumn() == LineIndexingService.Column.FULL_WIDTH
                 || candidate.getColumn() == LineIndexingService.Column.FULL_WIDTH
                 || anchor.getColumn() == candidate.getColumn();
+    }
+
+    private boolean isBetterCandidate(VendorCandidate candidate, VendorCandidate currentBest) {
+        if (candidate == null) {
+            return false;
+        }
+        if (currentBest == null) {
+            return true;
+        }
+        if (candidate.score != currentBest.score) {
+            return candidate.score > currentBest.score;
+        }
+        boolean candidateCompany = containsCompanyKeyword(candidate.value);
+        boolean bestCompany = containsCompanyKeyword(currentBest.value);
+        if (candidateCompany != bestCompany) {
+            return candidateCompany;
+        }
+        return candidate.value.length() > currentBest.value.length();
     }
 
     private static class VendorCandidate {
